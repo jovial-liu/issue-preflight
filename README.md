@@ -81,6 +81,38 @@ By default, a completed report exits 0. `--fail-on-hold` exits 2 for `hold`; `--
 
 Before requesting PR details, repository-name case variants are merged and candidates whose known repository matches the target are read first. Order within each group is preserved; failed requests still consume the detail budget. Unknown redirect aliases cannot be prioritized before they are fetched. Once details arrive, the report uses the actual base repository identity. A non-closing PR from another repository is described as a reference with unverified implementation relevance, regardless of whether it is open, closed, or merged.
 
+## Select issues from a repository
+
+When you do not have an issue number yet, use the explicit `scan` command:
+
+```bash
+issue-preflight scan OWNER/REPO --limit 5 --format json --output scan.json
+```
+
+It selects the first **5 open issues by most recent update**, in GitHub REST order, and excludes pull requests. `--limit` accepts 1–10. Selection reads at most two pages of 100 entries, including PRs. Each selected issue uses the same evidence checks and full report as the single-issue command, including timeline PRs when an issue has no comments. This selects issues for further investigation; it does not rank their value or recommend implementing them.
+
+The batch uses schema `issue-preflight-scan/1`. `results` contains an issue plus either its complete `issue-preflight/1` report or an `error`, and `summary` counts decisions and errors without assigning a blanket approval. Successful common repository and pinned-policy requests are reused within the batch; issue, comment, and timeline evidence is fetched separately for each issue. Issues can close and the listing order can change while collection runs. Duplicate issue numbers are selected once; the listing is not an atomic snapshot.
+
+`listing_status` distinguishes the selection boundary from missing evidence:
+
+| Status | Meaning | `selection_truncated` |
+| --- | --- | --- |
+| `exhausted` | The collected listing ended without an additional issue | `false` |
+| `selection_limit` | An additional issue proved that only the first N were selected | `true` |
+| `page_limit` | Two full pages were reached; more issues may remain beyond them | `null` |
+| `error` | A listing page failed or returned unusable data | `null` |
+
+Normal selection truncation is visible without claiming a collection failure. Page caps and listing failures appear in `listing_gaps`; individual evidence gaps remain in each issue report. Unknown contributor identity appears in `identity_gaps` and each successful issue report. An explicit empty or whitespace-only `scan --actor` value is unknown; it does not switch to your authenticated login.
+
+The original issue-number/URL command and its exit behavior remain supported. For `scan`, the report is still written before exit:
+
+- Default: exit 0 for a bounded report, including a visible selection or page cap.
+- `--fail-on-hold`: exit 2 if any inspected issue has a blocker.
+- `--fail-on-review`: exit 2 for any hold/review, unknown identity, selection truncation, or listing gap.
+- A listing failure or required per-issue API failure: preserve the other results and exit 1, taking precedence over both flags. Input, repository lookup, and output failures also exit 1.
+
+The command inherits `--actor`, `--max-prs`, `--format`, and `--output`. It sends only GET requests and saves no file unless you provide `--output`. `issue-preflight scan --help` shows its options.
+
 ## Limits
 
 Policy detection is heuristic and currently recognizes English phrasing. Contribution rules can live outside the checked paths, a quoted rule can be ambiguous, and trusted-contributor exceptions may require a maintainer's judgment. Common code examples and HTML comments are excluded, but text handling and link discovery are not a complete Markdown parser. A `blob` URL with an unknown ref and a nested file path may be ambiguous; it is reported as a gap. Closing references show stated intent; automatic closure also depends on GitHub's default-branch rules.

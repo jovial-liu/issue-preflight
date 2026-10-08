@@ -66,6 +66,36 @@ Codex / Claude Code 可以使用仓库内的 [Issue Preflight 技能](skills/iss
 
 requests-cache 的贡献指南把“审核、测试并理解”放在“由人类”之前。v0.1.2 能识别这类措辞及常见 Markdown 强调、软换行，并保留原文行号和片段。查看[固定提交的政策示例](examples/requests-cache-human-review.md)，了解原始规则与报告边界。
 
+## 从仓库选择 issue
+
+还没有 issue 编号时，可以使用显式 `scan` 子命令：
+
+```bash
+issue-preflight scan OWNER/REPO --limit 5 --format json --output scan.json
+```
+
+默认按 GitHub REST 的最近更新时间降序选择前 **5 个 open issue**，排除 PR；`--limit` 支持 1–10。列表最多读取两页，每页 100 条，包含 PR。每个选中 issue 都复用原有的完整证据报告与政策、认领、覆盖判断，包括没有评论但时间线已有 PR 的情况。这里只降低寻找候选的成本，不评估问题价值或建议直接开工。
+
+批量 JSON 使用 `issue-preflight-scan/1`：`results` 每项包含 issue 及完整的原 `issue-preflight/1` 报告，或明确的 `error`；`summary` 分别计数，不给整批“安全”结论。批次内复用成功的仓库信息和固定提交政策请求；每个 issue、评论和时间线仍单独获取。采集期间 issue 可能关闭、列表顺序可能变化；重复编号只选择一次，列表不是原子快照。
+
+| `listing_status` | 含义 | `selection_truncated` |
+| --- | --- | --- |
+| `exhausted` | 所采集列表已结束，没有发现额外 issue | `false` |
+| `selection_limit` | 已看到额外 issue，只选前 N 项 | `true` |
+| `page_limit` | 达到两页上限，页外是否还有 issue 未知 | `null` |
+| `error` | 列表页获取失败或数据不可用 | `null` |
+
+正常只选前 N 项会单独说明，不冒充 API 失败；页数上限和列表失败写入 `listing_gaps`。每项证据缺口保留在原报告中，身份未知同时写入 `identity_gaps` 和每个成功报告。显式传给 `scan --actor` 的空值或纯空白也标为未知，不会切换成当前登录身份。
+
+原单 issue 命令和退出行为保持兼容。`scan` 的退出规则如下，检查后仍先输出报告：
+
+- 默认：有界报告返回 0，明确显示选择或页数上限。
+- `--fail-on-hold`：任一已检查 issue 有阻碍时返回 2。
+- `--fail-on-review`：任一 hold/review、身份未知、只选前 N 项或列表缺口时返回 2。
+- 列表页或单项必要 API 失败：保留其他结果，返回 1，优先于两个严格选项。输入、仓库查询或文件输出失败也返回 1。
+
+继承 `--actor`、`--max-prs`、`--format` 和 `--output`。所有请求均为 GET；只有明确指定 `--output` 才保存文件。查看 `issue-preflight scan --help` 获取选项。
+
 ## 边界
 
 规则判断是启发式的，目前主要识别英文规则。常见代码示例和 HTML 注释会被排除，但文本处理和链接发现没有实现完整 Markdown 解析器。未知 ref 加多级文件路径的 `blob` URL 可能有歧义，会记录为缺口。不同措辞、可信贡献者例外、站外政策和没有互相引用的重复实现仍需人工判断。当前 REST 扫描不能解析 Development 栏中的现有手工关联，也不从提交信息推断修复；手工关联事件会列为缺口。报告会保留来源与缺口；搜索无结果不能证明没人做。

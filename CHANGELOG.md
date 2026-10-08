@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add an explicit `scan OWNER/REPO` command that selects up to five recently updated open issues by default (maximum ten), excluding PRs, and reuses the full single-issue evidence checks.
+- Distinguish normal selection truncation, listing exhaustion, two-page caps, identity gaps, and API failures. Preserve partial per-issue results with exit 1 for required fetch failures.
+- Reuse successful common repository and pinned-policy requests within a batch, retaining read-only access and the existing single-issue CLI.
+
 ## 0.1.3
 
 - Use neutral wording for cross-repository non-closing PR references, preserving their sources and states without claiming implementation overlap or a reverse reference.
