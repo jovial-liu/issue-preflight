@@ -16,8 +16,14 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e . pytest ruff build
+      - run: issue-preflight --help
+      - run: python -m issue_preflight.mcp --help
+      - name: Verify base install has no MCP dependency
+        run: python -c "import importlib.util; assert importlib.util.find_spec('mcp') is None; import issue_preflight.mcp"
+      - run: python -m pip install -e ".[mcp]"
       - run: python -m pytest -q
       - run: ruff check .
       - run: ruff format --check .
       - run: python -m build
       - run: issue-preflight --help
+      - run: issue-preflight-mcp --help

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- Add an optional local MCP stdio server with `inspect_issue` and `scan_repository` tools, using the official Python SDK 2.3 or newer. The base CLI still has no third-party runtime dependencies.
+- Return the existing complete JSON reports alongside Markdown, including identity, permission, collection and batch-error gaps. `hold` and `review` remain successful inspections.
+- Reject unknown parameters, invalid targets, incorrect types and out-of-range budgets before looking up GitHub. Use a fresh adapter per tool invocation; authentication stays with `gh` and all requests remain GET.
+- Share the existing identity-gap behavior with the CLI and synchronize package/server version metadata.
+
+## 0.2.3
+
+- Check live repository PR settings. Disabled PRs block contributions; restricted creation requires matching authenticated identity and boolean write permission.
+- Preserve missing or ambiguous settings/identity/permission as review gaps. Keep reported access fields and sources in JSON and Markdown, and cache only successful common requests within a batch.
+
 ## 0.2.2
 
 - Require a visible, explicit assignment exemption before a quoted `help wanted` or `prs welcome` label can waive an assignment rule. Label inventories, comments, code examples, negative conditions, and unrelated permissions retain the blocker.

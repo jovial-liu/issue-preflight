@@ -2,6 +2,8 @@
 
 The [Issue Preflight skill](../skills/issue-preflight/SKILL.md) calls the existing CLI before an agent implements a GitHub issue. It uses the same GitHub CLI login as the command line and needs no MCP server or LLM API key.
 
+An optional [MCP stdio server](mcp.md) is also available for clients that discover tools through MCP. It exposes the same reports; the skill remains a separate CLI integration.
+
 Install the CLI first using the project's [quick start](https://github.com/jovial-liu/issue-preflight#quick-start). The skill requires Issue Preflight 0.1.2 or newer, Python 3.10+, and an authenticated `gh` in the agent's execution environment. Confirm that `issue-preflight --help` includes `--fail-on-review`. Installing a skill alone does not install the CLI or configure GitHub authentication.
 
 Copy the same `skills/issue-preflight` folder from this checkout into your target project's skill directory. Keep the enclosing `issue-preflight` directory and its `SKILL.md` file:

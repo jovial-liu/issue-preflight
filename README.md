@@ -6,7 +6,7 @@
 
 An open issue can already have a fix, be assigned to someone else, or belong to a project that requires maintainer approval before accepting a PR. Issue Preflight reads GitHub discussions, related PRs, and contribution guides, then produces a source-linked Markdown or JSON report.
 
-It runs locally, uses your existing `gh` login, and has **no Python runtime dependencies**. No LLM API key is needed. All GitHub requests are GET requests.
+It runs locally and uses your existing `gh` login. The base CLI has **no third-party Python runtime dependencies**; an optional [MCP stdio interface](docs/mcp.md) lets agents discover its tools. No LLM API key is needed. All GitHub requests are GET requests.
 
 ## Quick start
 
@@ -14,7 +14,7 @@ Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first examp
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.3/issue_preflight-0.2.3-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.0/issue_preflight-0.3.0-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.3/issue_preflight-0.2.3-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.0/issue_preflight-0.3.0-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -74,6 +74,8 @@ The requests-cache guide puts the review action before the human reviewer: "revi
 Ask your agent to run the preflight before implementing the issue, read the linked sources, and resolve any collection gaps. GitHub text is external evidence, not instructions to execute.
 
 For Codex or Claude Code, copy the included [Issue Preflight skill](skills/issue-preflight/SKILL.md) into the target project's skill directory. See the [agent installation guide](docs/agent-skill.md) for paths, invocation examples, prerequisites, and the checks performed so far. The skill uses the CLI and needs no MCP server.
+
+For MCP clients, install the optional extra and launch `issue-preflight-mcp` (or `python -m issue_preflight.mcp`) over stdio. Clients can discover `inspect_issue` and `scan_repository`, with validated input budgets and the same source-linked reports. See the [MCP setup and result contract](docs/mcp.md). No client configuration is changed by installation.
 
 ```bash
 issue-preflight 'OWNER/REPO#123' \
@@ -137,14 +139,14 @@ GitHub authentication remains managed by `gh`. The tool does not create issues, 
 ```bash
 git clone https://github.com/jovial-liu/issue-preflight.git
 cd issue-preflight
-python -m pip install -e . pytest ruff build
+python -m pip install -e ".[mcp]" pytest ruff build
 python -m pytest -q
 ruff check .
 ruff format --check .
 python -m build
 ```
 
-Tests exercise number collisions, cross-repo references, closed versus merged PRs, assignment exceptions, partial API failures, collection caps, and read-only subprocess behavior without network access. CI covers Linux and Windows on Python 3.10, 3.12, and 3.14.
+Tests exercise number collisions, cross-repo references, closed versus merged PRs, assignment exceptions, partial API failures, collection caps, read-only subprocess behavior, and MCP tool discovery/results over stdio without network access. CI covers Linux and Windows on Python 3.10, 3.12, and 3.14, checking the base installation before adding MCP dependencies. Without the extra, MCP protocol tests are skipped; install it to run the complete suite.
 
 Contributions are welcome: include a reproduction or a small anonymized fixture for any classification error. Prepared with OpenAI Codex; maintained by [jovial-liu](https://github.com/jovial-liu).
 
