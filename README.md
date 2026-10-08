@@ -14,7 +14,7 @@ Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first examp
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.3/issue_preflight-0.1.3-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.0/issue_preflight-0.2.0-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.3/issue_preflight-0.1.3-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.0/issue_preflight-0.2.0-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
