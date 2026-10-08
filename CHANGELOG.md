@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Require a visible, explicit assignment exemption before a quoted `help wanted` or `prs welcome` label can waive an assignment rule. Label inventories, comments, code examples, negative conditions, and unrelated permissions retain the blocker.
+- Bind exemptions to the stated label and local sentence or table cell. Preserve supported positive inline-code and linked-label wording, case-insensitive assignment, and original source lines.
+
 ## 0.2.1
 
 - Try the demonstrated `docs/contributing.md` and `docs/contributing.rst` layouts when no nonblank contribution guide has been read; an agent guide alone does not suppress fallback.

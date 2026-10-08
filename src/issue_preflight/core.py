@@ -9,7 +9,17 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 from .github import GitHubError, NotFound
-from .policy_links import DOCUMENT_SUFFIXES, EXTENSIONLESS_GUIDES, policy_links
+from .policy_links import (
+    DOCUMENT_SUFFIXES,
+    EXTENSIONLESS_GUIDES,
+    policy_links,
+)
+from .policy_links import (
+    _destination as _link_destination,
+)
+from .policy_links import (
+    _tail as _link_tail,
+)
 from .text import prose, without_emphasis
 
 REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -215,6 +225,106 @@ def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> li
     return documents
 
 
+def _assignment_exceptions(original: str, visible: str) -> set[str]:
+    """Recognize a quoted welcome label only beside a visible assignment exemption."""
+    quoted = list(re.finditer(r"([`\"'])(help wanted|prs welcome)\1", original, re.I))
+    masked = list(visible)
+    spans = []
+    for match in quoted:
+        start = match.start()
+        escape_start = start
+        while escape_start and original[escape_start - 1] == "\\":
+            escape_start -= 1
+        if (start - escape_start) % 2:
+            continue
+        # Restore only the label token. Comments/examples retain masked context;
+        # genuine inline-code labels can be matched without exposing their examples.
+        masked[start : match.end()] = original[start : match.end()]
+        spans.append(match)
+    text = "".join(masked)
+    exceptions = set()
+    for index, match in enumerate(spans):
+        before_start = max(0, match.start() - 240)
+        if index:
+            before_start = max(before_start, spans[index - 1].end())
+        before = text[before_start : match.start()]
+        before = re.split(r"\x00|\r?\n[ \t]*\r?\n", before)[-1]
+        after_start = match.end()
+        # Reuse the existing one-line link grammar within a bounded context so
+        # URL dots/semicolons cannot be mistaken for prose clause boundaries.
+        link_tail = original[after_start : after_start + 320]
+        if link_tail.startswith("]("):
+            destination = _link_destination(link_tail, 2)
+            end = _link_tail(link_tail, destination[1], inline=True) if destination else None
+            if end is not None:
+                after_start += end
+        after_end = match.end() + 320
+        if index + 1 < len(spans):
+            after_end = min(after_end, spans[index + 1].start())
+        after = text[after_start:after_end]
+        after = re.split(r"\x00|\r?\n[ \t]*\r?\n", after)[0]
+        line_start = original.rfind("\n", max(0, match.start() - 240), match.start()) + 1
+        table = match.start() - line_start <= 240 and re.fullmatch(
+            r"[ \t]*\|[ \t]*(?:[*_]{1,2})?\[?", original[line_start : match.start()]
+        )
+        if table:
+            after = re.split(r"[\r\n]", after)[0]  # Other table rows describe other labels.
+        if re.search(
+            r"\b(?:still\s+(?:needs?|requires?)\s+assignment|"
+            r"does\s+not\s+(?:waive|mean)|not\s+an?\s+exception|not\s+exempt)\b",
+            after,
+            re.I,
+        ):
+            continue
+        unless = re.search(
+            r"(?:^|[.!?]\s*)\s*(?:the\s+)?author\s+must\s+(?:also\s+)?be\s+assigned\b"
+            r"\s*,?\s*unless\s+(?:it|(?:(?:the|that|this)\s+)?issue)\s+"
+            r"(?:has|carries)\s+(?:the\s+)?(?:[*_]{1,2})?\[?\s*$",
+            before,
+            re.I,
+        )
+        unless_tail = re.fullmatch(r"(?:[*_]{1,2})?(?:\s+label)?[.!]?\s*", after, re.I)
+        permission = re.fullmatch(
+            r"\s+(?:label\s+)?\(which\s+means\s+we['’]d\s+welcome\s+a\s+"
+            r"(?:PR|pull\s+request)\s+for\s+it\s+from\s+anyone\)[.!]?\s*",
+            after,
+            re.I,
+        )
+        alternative = re.search(
+            r"(?:^|[.!?]\s*)\s*(?:a|the)\s+maintainer\s+has\s+assigned\s+"
+            r"(?:that|the|this)\s+issue\s+"
+            r"to\s+you\s*,\s*or\s+(?:the|that|this)\s+issue\s+"
+            r"(?:has|carries)\s+(?:the\s+)?(?:[*_]{1,2})?\[?\s*$",
+            before,
+            re.I,
+        )
+        no_assignment = re.fullmatch(
+            r"\s+(?:label\s+)?means\s+no\s+assignment\s+(?:is\s+)?(?:needed|required)[.!]?\s*",
+            after,
+            re.I,
+        )
+        label_definition = re.search(r"(?:^|[.!?]\s*)\s*(?:the\s+)?$", before, re.I)
+        cell = re.fullmatch(r"[ \t]*\|([^|\r\n]*)\|[ \t]*", after) if table else None
+        table_permission = cell and re.fullmatch(
+            r"\s*we['’]d\s+welcome\s+a\s+(?:PR|pull\s+request)\s+for\s+(?:this|it)\s+"
+            r"from\s+anyone\s*[—–-]\s*no\s+assignment\s+(?:is\s+)?(?:needed|required)[.!]?\s*",
+            cell[1],
+            re.I,
+        )
+        direct_cell = cell and re.fullmatch(
+            r"\s*no\s+assignment\s+(?:is\s+)?(?:needed|required)[.!]?\s*", cell[1], re.I
+        )
+        if (
+            (unless and unless_tail)
+            or (alternative and permission)
+            or (label_definition and no_assignment)
+            or table_permission
+            or direct_cell
+        ):
+            exceptions.add(match[2].lower())
+    return exceptions
+
+
 def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) -> list[dict]:
     findings = []
     for doc in documents:
@@ -248,10 +358,7 @@ def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) ->
             re.IGNORECASE | re.DOTALL,
         )
         if assignment_rule and "assign" in text.lower():
-            exceptions = set(
-                re.findall(r"[`\"'](help wanted|prs welcome)[`\"']", doc["text"], re.I)
-            )
-            exceptions = {label.lower() for label in exceptions}
+            exceptions = _assignment_exceptions(doc["text"], text)
             if not assigned and not (labels & exceptions):
                 findings.append(
                     _source_finding(

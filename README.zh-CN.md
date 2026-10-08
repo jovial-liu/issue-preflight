@@ -14,7 +14,7 @@
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.1/issue_preflight-0.2.1-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.2/issue_preflight-0.2.2-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.1/issue_preflight-0.2.1-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.2/issue_preflight-0.2.2-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -57,6 +57,8 @@ Codex / Claude Code 可以使用仓库内的 [Issue Preflight 技能](skills/iss
 主探测路径是 `CONTRIBUTING.md`、`.github/CONTRIBUTING.md` 和 `AGENTS.md`。已发现的明确 AI、Agent 和贡献政策链接优先于剩余探测，包括引用式链接。未读到非空白贡献指南时，还会尝试 `docs/contributing.md`、`docs/contributing.rst`；仅有 `AGENTS.md` 不会取消贡献指南的回退查找。同仓库且受支持的文本文件可以通过相对路径、父目录（不能越过仓库根目录）、根路径或 GitHub `blob` URL 引用；读取一律使用本轮固定的提交，不使用链接中的旧分支或旧 SHA。总计最多 **六次 contents 请求**，包含默认探测、404 和失败请求。明确链接的文件不存在、无法读取、类型不支持、位于外部或路径有歧义时，都会记录证据缺口；达到上限后仍未读取的有效探测路径，以及只读到空白文件的情况，也会留下缺口。
 
 RST 文件会保留固定提交的来源链接，并列出格式限制，要求人工阅读。RST 的注释、示例和指令语法不同，当前 Markdown 规则分类器不会自动判断其中的规则，也不解析 RST 原生链接。
+
+`help wanted` 或 `prs welcome` 标签只有在指南紧邻该标签明确规定受支持的认领豁免时，才会免除已识别的认领要求。标签清单、注释、代码示例和其他权限说明均不足以豁免；措辞含糊时保留认领阻断，供使用者阅读固定提交的来源。
 
 `approval_policy` 属于 `review`：检测到的规则要求 PR 链接到包含维护者已批准方案的 issue 或 discussion。需要阅读原文与适用范围，例如规则可能专门针对 AI 生成的贡献。扫描没有核验是否已经存在获批方案。
 

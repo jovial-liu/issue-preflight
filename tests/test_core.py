@@ -432,6 +432,117 @@ def test_assignment_requirement_has_label_exception():
     assert inspect(api, "example/project#42")["decision"] == "no_obvious_blockers"
 
 
+@pytest.mark.parametrize(
+    "mention",
+    [
+        "<!-- Example label: `prs welcome` -->",
+        "```text\nExample label: `prs welcome`\n```",
+        "    Example label: `prs welcome`",
+        "<!-- The author must be assigned, unless it has `prs welcome`. -->",
+        "```text\nThe author must be assigned, unless it has `prs welcome`.\n```",
+        "    The author must be assigned, unless it has `prs welcome`.",
+        "Label inventory: `prs welcome` identifies beginner tasks.",
+        "| Label | Meaning |\n|---|---|\n| `prs welcome` | Beginner tasks |",
+        "The `prs welcome` label still requires assignment.",
+        "The `prs welcome` label does not waive assignment.",
+        "`prs welcome` identifies beginner tasks. `help wanted` means no assignment needed.",
+        "A maintainer has assigned that issue to you, or the issue carries `help wanted`; "
+        "`prs welcome` identifies beginner tasks.",
+        "The `prs welcome` label is descriptive; no assignment needed is only true "
+        "for `help wanted`.",
+        "Does `prs welcome` mean no assignment needed? No, it only marks beginner tasks.",
+        "The `prs welcome` label is not exempt from assignment; "
+        "no assignment needed is an obsolete rule.",
+        "The dashboard reports whether a maintainer is assigned or the issue has "
+        "`prs welcome`; this display is informational only.",
+        "The labels include `prs welcome`. No assignment needed for submitting bug reports.",
+        "| `prs welcome` | Beginner tasks | other label | No assignment needed |",
+        "The author must be assigned, unless it has no `prs welcome` label.",
+        "The author must be assigned, unless the dashboard hides `prs welcome`.",
+        "It is not true that the author must be assigned unless it has `prs welcome`.",
+        "The author must be assigned, unless it has `prs welcome` "
+        "(this exception is no longer supported).",
+        "Do not assume `prs welcome` means no assignment needed.",
+        "It is not true that `prs welcome` means no assignment needed.",
+        "The dashboard shows whether `prs welcome` means no assignment needed.",
+        "| Not `prs welcome` | No assignment needed |",
+        "| Other label | `prs welcome` | No assignment needed |",
+        "| `prs welcome` | We don't welcome a PR for this from anyone — no assignment needed |",
+        "A maintainer has assigned that issue to you, or the issue carries the "
+        "`prs welcome` label (which means we don't welcome a PR for it from anyone).",
+        "A maintainer has assigned that issue to you, or the issue carries no "
+        "`prs welcome` label (which means we'd welcome a PR for it from anyone).",
+        r"The author must be assigned, unless it has \`prs welcome\`.",
+    ],
+)
+def test_assignment_label_mentions_do_not_create_an_exception(mention, monkeypatch, capsys):
+    policy = "# Contributing\r\n\r\nThe author must be assigned.\r\n\r\n" + mention
+    api = FixtureAPI(policy)
+    api.issue["labels"] = [{"name": "prs welcome"}]
+    result = inspect(api, "example/project#42", actor="contributor")
+    monkeypatch.setattr(cli, "GitHub", lambda: api)
+    exit_code = cli.main(
+        ["example/project#42", "--actor", "contributor", "--format", "json", "--fail-on-review"]
+    )
+    assert exit_code == 2
+    assert json.loads(capsys.readouterr().out)["decision"] == "hold"
+    assert result["decision"] == "hold"
+    finding = next(f for f in result["findings"] if f["code"] == "assignment_policy")
+    assert finding["url"] == f"https://github.com/{REPO}/blob/{SHA}/CONTRIBUTING.md#L3"
+    assert finding["line_start"] == finding["line_end"] == 3
+    assert finding["excerpt"] == "The author must be assigned."
+
+
+def test_masked_assignment_exception_still_fails_the_cli_review_gate(monkeypatch, capsys):
+    api = FixtureAPI("The author must be assigned.\n\n<!-- Example label: `prs welcome` -->")
+    api.issue["labels"] = [{"name": "prs welcome"}]
+    monkeypatch.setattr(cli, "GitHub", lambda: api)
+    assert (
+        cli.main(
+            ["example/project#42", "--actor", "contributor", "--format", "json", "--fail-on-review"]
+        )
+        == 2
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["decision"] == "hold"
+    assert "assignment_policy" in codes(result)
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        "The author must be assigned, unless it has `prs welcome`.",
+        'The author must be assigned, unless it has "prs welcome".',
+        "The author must be assigned, unless it has 'prs welcome'.",
+        "The author must be assigned,\r\nunless it has **`prs welcome`**.",
+        "`prs welcome` means no assignment needed.",
+        "The `prs welcome` label means no assignment required.",
+        "| `prs welcome` | No assignment needed |",
+        # MCP Python SDK CONTRIBUTING.md L21, pinned 91941ed4d3985d59def99e090baa3f880c626cc8.
+        "A maintainer has assigned that issue to you, or the issue carries the "
+        "[`help wanted`](https://github.com/modelcontextprotocol/python-sdk/issues?"
+        "q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) label "
+        "(which means we'd welcome a PR for it from anyone).",
+        # Same snapshot L59 explicitly states the label waives assignment.
+        "| [`help wanted`](https://github.com/modelcontextprotocol/python-sdk/issues?"
+        "q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) | "
+        "We'd welcome a PR for this from anyone — no assignment needed |",
+    ],
+)
+def test_assignment_genuine_quoted_label_exceptions_remain_supported(exception):
+    label = "help wanted" if "help wanted" in exception else "prs welcome"
+    api = FixtureAPI("The author must be assigned.\n\n" + exception)
+    api.issue["labels"] = [{"name": label.upper()}]
+    result = inspect(api, "example/project#42", actor="contributor")
+    assert result["decision"] == "no_obvious_blockers"
+    api.issue["labels"] = []
+    assert inspect(api, "example/project#42", actor="contributor")["decision"] == "hold"
+    api.issue["assignees"] = [{"login": "Contributor"}]
+    assert (
+        inspect(api, "example/project#42", actor="CONTRIBUTOR")["decision"] == "no_obvious_blockers"
+    )
+
+
 def test_assignment_comparison_is_case_insensitive():
     api = FixtureAPI("The author must be assigned.")
     api.issue["assignees"] = [{"login": "Contributor"}]
