@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "issue-preflight"
+version = "0.1.0"
+description = "Check GitHub contribution evidence before implementing an issue."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Kaixin Liu"}]
+dependencies = []
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development",
+]
+
+[project.scripts]
+issue-preflight = "issue_preflight.cli:main"
+
+[project.urls]
+Source = "https://github.com/jovial-liu/issue-preflight"
+Issues = "https://github.com/jovial-liu/issue-preflight/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/issue_preflight"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
