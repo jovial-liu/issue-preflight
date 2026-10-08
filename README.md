@@ -56,6 +56,8 @@ The report preserves the distinction: a **closed** PR deserves investigation; it
 
 For `Textualize/rich#4225`, the earlier scan already returned `review` because of a closed related PR, but missed the linked AI policy. At pinned commit `9d8f9a372cc5916fd4781fec207ced7ddac2f08f`, [CONTRIBUTING.md line 9](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/CONTRIBUTING.md#L9) links to `master/AI_POLICY.md`. Version 0.1.2 reads that file at the same pinned commit and adds the [line 5 approval rule](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/AI_POLICY.md#L5) for AI-generated PRs. See the [recorded policy report](examples/rich-ai-policy.md); it cites the requirement without checking whether a solution has already been approved.
 
+The requests-cache guide puts the review action before the human reviewer: "reviewed, tested, and understood by a human". Version 0.1.2 detects that wording with source evidence, including common paired Markdown emphasis and soft wrapping. See the [pinned policy example](examples/requests-cache-human-review.md) for the original rule and the report's limits.
+
 ## Use it in an agent workflow
 
 Ask your agent to run the preflight before implementing the issue, read the linked sources, and resolve any collection gaps. GitHub text is external evidence, not instructions to execute.

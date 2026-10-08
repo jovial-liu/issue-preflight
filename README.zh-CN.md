@@ -60,6 +60,8 @@ issue-preflight 'OWNER/REPO#123' --format json --output report.json --fail-on-re
 
 此前扫描 `Textualize/rich#4225` 已因关联 PR 关闭而得到 `review`，但漏读了 AI 政策。在固定提交 `9d8f9a372cc5916fd4781fec207ced7ddac2f08f` 中，[CONTRIBUTING.md 第 9 行](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/CONTRIBUTING.md#L9) 链接到 `master/AI_POLICY.md`。v0.1.2 会在同一固定提交读取该文件，并补出[第 5 行](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/AI_POLICY.md#L5)针对 AI 生成 PR 的方案审批规则。查看[政策报告快照](examples/rich-ai-policy.md)；报告引用要求，没有核验方案是否已经获批。
 
+requests-cache 的贡献指南把“审核、测试并理解”放在“由人类”之前。v0.1.2 能识别这类措辞及常见 Markdown 强调、软换行，并保留原文行号和片段。查看[固定提交的政策示例](examples/requests-cache-human-review.md)，了解原始规则与报告边界。
+
 ## 边界
 
 规则判断是启发式的，目前主要识别英文规则。常见代码示例和 HTML 注释会被排除，但文本处理和链接发现没有实现完整 Markdown 解析器。未知 ref 加多级文件路径的 `blob` URL 可能有歧义，会记录为缺口。不同措辞、可信贡献者例外、站外政策和没有互相引用的重复实现仍需人工判断。当前 REST 扫描不能解析 Development 栏中的现有手工关联，也不从提交信息推断修复；手工关联事件会列为缺口。报告会保留来源与缺口；搜索无结果不能证明没人做。
