@@ -14,7 +14,7 @@ Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first examp
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.2/issue_preflight-0.1.2-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.3/issue_preflight-0.1.3-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.2/issue_preflight-0.1.2-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.3/issue_preflight-0.1.3-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -62,6 +62,8 @@ The requests-cache guide puts the review action before the human reviewer: "revi
 
 Ask your agent to run the preflight before implementing the issue, read the linked sources, and resolve any collection gaps. GitHub text is external evidence, not instructions to execute.
 
+For Codex or Claude Code, copy the included [Issue Preflight skill](skills/issue-preflight/SKILL.md) into the target project's skill directory. See the [agent installation guide](docs/agent-skill.md) for paths, invocation examples, prerequisites, and the checks performed so far. The skill uses the CLI and needs no MCP server.
+
 ```bash
 issue-preflight 'OWNER/REPO#123' \
   --format json \
@@ -76,6 +78,8 @@ issue-preflight 'OWNER/REPO#123' \
 | `no_obvious_blockers` | Nothing obvious was found in the collected evidence; this is not approval |
 
 By default, a completed report exits 0. `--fail-on-hold` exits 2 for `hold`; `--fail-on-review` exits 2 for either `hold` or `review`, including incomplete evidence. Both options still write the report. An input, authentication, or required API failure exits 1. `--max-prs` bounds detailed PR lookups (default 8, maximum 20). Comments and timeline events are capped at 200 each, and PR search at 100 results. Every reached cap appears in `collection_gaps`.
+
+Before requesting PR details, repository-name case variants are merged and candidates whose known repository matches the target are read first. Order within each group is preserved; failed requests still consume the detail budget. Unknown redirect aliases cannot be prioritized before they are fetched. Once details arrive, the report uses the actual base repository identity. A non-closing PR from another repository is described as a reference with unverified implementation relevance, regardless of whether it is open, closed, or merged.
 
 ## Limits
 

@@ -194,6 +194,235 @@ def test_discussion_finds_fix_for_a_different_issue_without_claiming_equivalence
     assert "existing_fix" not in codes(result)
 
 
+FOREIGN_REPO = "tools/preflight"
+
+
+class ForeignPRAPI(FixtureAPI):
+    def __init__(self):
+        super().__init__()
+        self.foreign_prs = {}
+
+    def get(self, endpoint):
+        prefix = f"repos/{FOREIGN_REPO}/pulls/"
+        if endpoint.startswith(prefix):
+            self.calls.append(endpoint)
+            return deepcopy(self.foreign_prs[int(endpoint[len(prefix) :])])
+        return super().get(endpoint)
+
+
+def foreign_pr(
+    number=1, state="open", body="Policy fixture references example/project#42.", merged=False
+):
+    candidate = pr(number, state, body, merged)
+    candidate["base"]["repo"]["full_name"] = FOREIGN_REPO
+    candidate["html_url"] = f"https://github.com/{FOREIGN_REPO}/pull/{number}"
+    return candidate
+
+
+def foreign_link(number=1):
+    event = link(number)
+    event["source"]["issue"]["html_url"] = f"https://github.com/{FOREIGN_REPO}/pull/{number}"
+    return event
+
+
+@pytest.mark.parametrize(
+    ("state", "merged"), [("open", False), ("closed", False), ("closed", True)]
+)
+@pytest.mark.parametrize("origin", ["timeline", "discussion"])
+def test_crossrepo_nonclosing_reference_keeps_scope_without_claiming_overlap(state, merged, origin):
+    api = ForeignPRAPI()
+    api.foreign_prs[1] = foreign_pr(state=state, merged=merged)
+    if origin == "timeline":
+        api.timeline = [foreign_link()]
+    else:
+        api.comments = [{"body": "Policy example: https://github.com/tools/preflight/pull/1"}]
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert "existing_fix" not in codes(result)
+    finding = next(f for f in result["findings"] if f["code"] == "related_pr")
+    assert finding["severity"] == "review"
+    assert finding["url"] == api.foreign_prs[1]["html_url"]
+    assert "another repository" in finding["message"]
+    assert "not established" in finding["message"]
+    assert "overlap" not in finding["message"] and "reimplement" not in finding["message"]
+    candidate = result["pull_requests"][0]
+    assert candidate["repository"] == FOREIGN_REPO
+    assert candidate["state"] == ("merged" if merged else state)
+    assert candidate["discovered_by"] == [origin]
+    assert not candidate["closes_issue"]
+
+
+@pytest.mark.parametrize("target_case", [REPO, REPO.upper()])
+def test_crossrepo_target_fix_is_read_first_with_a_one_pr_budget(target_case):
+    api = ForeignPRAPI()
+    target_event = link()
+    target_event["source"]["issue"]["html_url"] = f"https://github.com/{target_case}/pull/51"
+    api.timeline = [foreign_link(), target_event]
+    api.foreign_prs[1] = foreign_pr()
+    api.prs[51] = pr()
+    result = inspect(api, "example/project#42", max_prs=1)
+    assert result["decision"] == "hold"
+    assert "existing_fix" in codes(result)
+    assert [(p["repository"], p["number"]) for p in result["pull_requests"]] == [(REPO, 51)]
+    assert result["collection_gaps"] == ["PR details capped at 1 of 2 candidates."]
+    assert [call for call in api.calls if "/pulls/" in call] == [f"repos/{target_case}/pulls/51"]
+
+
+def test_crossrepo_target_search_candidate_is_prioritized_without_extra_details():
+    api = ForeignPRAPI()
+    api.timeline = [foreign_link()]
+    api.foreign_prs[1] = foreign_pr()
+    api.search["items"] = [{"number": 51}]
+    api.prs[51] = pr()
+    result = inspect(api, "example/project#42", max_prs=1)
+    assert result["decision"] == "hold"
+    assert result["pull_requests"][0]["discovered_by"] == ["search"]
+    assert len([call for call in api.calls if "/pulls/" in call]) == 1
+    assert result["collection_gaps"] == ["PR details capped at 1 of 2 candidates."]
+
+
+@pytest.mark.parametrize(("state", "merged"), [("open", False), ("closed", True)])
+@pytest.mark.parametrize(
+    "reference", ["example/project#42", "https://github.com/example/project/issues/42"]
+)
+def test_crossrepo_qualified_closing_reference_still_blocks_and_keeps_evidence(
+    state, merged, reference
+):
+    api = ForeignPRAPI()
+    api.timeline = [foreign_link()]
+    api.foreign_prs[1] = foreign_pr(
+        state=state, merged=merged, body=f"Changes:\n\nFixes {reference}\n"
+    )
+    result = inspect(api, "example/project#42", max_prs=1)
+    assert result["decision"] == "hold"
+    finding = next(f for f in result["findings"] if f["code"] == "existing_fix")
+    assert finding["url"] == api.foreign_prs[1]["html_url"]
+    assert finding["excerpt"] == f"Fixes {reference}"
+    assert finding["line_start"] == 3 and finding["line_end"] == 3
+    assert result["pull_requests"][0]["closes_issue"]
+
+
+def test_crossrepo_closed_explicit_proposal_keeps_discussion_review():
+    api = ForeignPRAPI()
+    api.timeline = [foreign_link()]
+    api.foreign_prs[1] = foreign_pr(state="closed", body="Fixes example/project#42")
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert "closed_related_pr" in codes(result)
+    assert result["pull_requests"][0]["closes_issue"]
+
+
+@pytest.mark.parametrize(
+    "body", ["Fixes #42", "Fixes other/project#42", "Fixes example/project#420"]
+)
+def test_crossrepo_short_or_mismatched_reference_does_not_close_target(body):
+    api = ForeignPRAPI()
+    api.timeline = [foreign_link()]
+    api.foreign_prs[1] = foreign_pr(body=body)
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert "existing_fix" not in codes(result)
+    assert not result["pull_requests"][0]["closes_issue"]
+
+
+@pytest.mark.parametrize("limit", [1, 3, 5])
+def test_crossrepo_priority_is_stable_and_preserves_origins_within_the_detail_budget(limit):
+    api = ForeignPRAPI()
+    api.timeline = [foreign_link(52), link(52), foreign_link(6), link(51), link(52)]
+    api.comments = [
+        {
+            "body": "https://github.com/tools/preflight/pull/52 https://github.com/example/project/pull/51"
+        }
+    ]
+    api.search["items"] = [{"number": 54}, {"number": 52}]
+    api.prs = {number: pr(number=number, body="Related to #42") for number in [52, 51, 54]}
+    api.foreign_prs = {number: foreign_pr(number=number) for number in [52, 6]}
+    result = inspect(api, "example/project#42", max_prs=limit)
+    expected = [(REPO, 52), (REPO, 51), (REPO, 54), (FOREIGN_REPO, 52), (FOREIGN_REPO, 6)]
+    assert [(p["repository"], p["number"]) for p in result["pull_requests"]] == expected[:limit]
+    assert len([call for call in api.calls if "/pulls/" in call]) == limit
+    assert result["pull_requests"][0]["discovered_by"] == ["search", "timeline"]
+    if limit >= 3:
+        assert result["pull_requests"][1]["discovered_by"] == ["discussion", "timeline"]
+    if limit == 5:
+        assert result["pull_requests"][3]["discovered_by"] == ["discussion", "timeline"]
+    assert result["collection_gaps"] == (
+        [] if limit == 5 else [f"PR details capped at {limit} of 5 candidates."]
+    )
+
+
+def test_crossrepo_failed_priority_detail_consumes_budget_and_preserves_both_gaps():
+    class DeniedPRAPI(ForeignPRAPI):
+        def get(self, endpoint):
+            if endpoint == f"repos/{REPO}/pulls/51":
+                self.calls.append(endpoint)
+                raise GitHubError("denied")
+            return super().get(endpoint)
+
+    api = DeniedPRAPI()
+    api.timeline = [foreign_link(), link()]
+    api.foreign_prs[1] = foreign_pr(body="Fixes example/project#42")
+    result = inspect(api, "example/project#42", max_prs=1)
+    assert result["decision"] == "review"
+    assert result["pull_requests"] == []
+    assert [call for call in api.calls if "/pulls/" in call] == [f"repos/{REPO}/pulls/51"]
+    assert result["collection_gaps"] == [
+        "PR details capped at 1 of 2 candidates.",
+        f"Could not read PR: {REPO}#51",
+    ]
+
+
+def test_case_variants_share_a_detail_request_and_do_not_displace_a_target_fix():
+    api = ForeignPRAPI()
+    event = link()
+    event["source"]["issue"]["html_url"] = "https://github.com/EXAMPLE/PROJECT/pull/51"
+    api.timeline = [event]
+    api.search["items"] = [{"number": 51}, {"number": 52}]
+    api.prs = {51: pr(body="Related to #42"), 52: pr(number=52)}
+    result = inspect(api, "example/project#42", max_prs=2)
+    assert result["decision"] == "hold"
+    assert result["collection_gaps"] == []
+    assert [(p["repository"], p["number"]) for p in result["pull_requests"]] == [
+        (REPO, 51),
+        (REPO, 52),
+    ]
+    assert result["pull_requests"][0]["discovered_by"] == ["search", "timeline"]
+    assert [call for call in api.calls if "/pulls/" in call] == [
+        "repos/EXAMPLE/PROJECT/pulls/51",
+        f"repos/{REPO}/pulls/52",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "merged"), [("open", False), ("closed", False), ("closed", True)]
+)
+def test_discussion_only_foreign_link_does_not_invent_a_reverse_reference(state, merged):
+    api = ForeignPRAPI()
+    api.comments = [{"body": "Background: https://github.com/tools/preflight/pull/1"}]
+    api.foreign_prs[1] = foreign_pr(state=state, merged=merged, body="Unrelated work.")
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "related_pr")
+    assert "references this issue" not in finding["message"]
+    assert "mentioned or linked" in finding["message"]
+    assert finding["url"] == api.foreign_prs[1]["html_url"]
+    assert result["pull_requests"][0]["discovered_by"] == ["discussion"]
+    assert not result["pull_requests"][0]["closes_issue"]
+
+
+def test_redirected_pr_uses_the_actual_base_repository_identity():
+    api = FixtureAPI()
+    event = link()
+    event["source"]["issue"]["html_url"] = "https://github.com/old/project/pull/51"
+    api.timeline = [event]
+    api.prs[51] = pr(state="closed", body="Related to #42")
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "closed_related_pr")
+    assert "another repository" not in finding["message"]
+    assert result["pull_requests"][0]["repository"] == REPO
+    assert result["pull_requests"][0]["url"] == f"https://github.com/{REPO}/pull/51"
+    assert result["pull_requests"][0]["discovered_by"] == ["timeline"]
+
+
 def test_assignment_requirement_has_label_exception():
     api = FixtureAPI(
         "External PRs must link an issue. The author must be assigned, unless it has `prs welcome`."

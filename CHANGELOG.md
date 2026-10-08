@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+- Use neutral wording for cross-repository non-closing PR references, preserving their sources and states without claiming implementation overlap or a reverse reference.
+- Prioritize candidates whose known repository matches the target before bounded PR detail requests. Preserve discovery order within each group and report skipped candidates.
+- Merge repository-name case variants before applying the detail cap, retaining the first endpoint spelling and combined discovery sources.
+- Use the actual base repository from PR details for report identity and same-repository classification, including repository redirects.
+- Add a shared agent skill and installation instructions for Codex and Claude Code. Validate a skill-guided read-only scan with the release CLI; client discovery and invocation remain untested.
+
 ## 0.1.2
 
 - Follow recognizable explicit AI, agent, and contribution policy links, including reference-style links, to supported text files in the same repository.

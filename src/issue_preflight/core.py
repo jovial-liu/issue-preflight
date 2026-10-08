@@ -329,6 +329,13 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
                 )
             )
     candidates: dict[tuple[str, int], set[str]] = {}
+    candidate_keys: dict[tuple[str, int], tuple[str, int]] = {}
+
+    def add_candidate(pr_repo: str, pr_number: int, origin: str) -> None:
+        # GitHub repository names are case-insensitive; retain the first URL spelling.
+        key = candidate_keys.setdefault((pr_repo.casefold(), pr_number), (pr_repo, pr_number))
+        candidates.setdefault(key, set()).add(origin)
+
     if any(item.get("event") in {"connected", "disconnected"} for item in timeline):
         omissions.append(
             "Manual issue/PR links changed in the timeline; current manual links "
@@ -342,14 +349,14 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
                 source.get("html_url", ""),
             )
             if match:
-                candidates.setdefault((match[1], int(match[2])), set()).add("timeline")
+                add_candidate(match[1], int(match[2]), "timeline")
     # Comments sometimes identify an earlier fix which never linked this issue directly.
     for item in [issue, *comments]:
         for match in re.finditer(
             rf"https://github\.com/({REPOSITORY})/pull/([1-9][0-9]*)(?![0-9])",
             str(item.get("body") or ""),
         ):
-            candidates.setdefault((match[1], int(match[2])), set()).add("discussion")
+            add_candidate(match[1], int(match[2]), "discussion")
     query = urlencode({"q": f'repo:{repo} is:pr "#{number}"', "per_page": 100})
     try:
         search = api.get(f"search/issues?{query}")
@@ -359,11 +366,15 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
     if search.get("incomplete_results") or search.get("total_count", 0) > 100:
         omissions.append("PR search returned partial results.")
     for item in search.get("items", []):
-        candidates.setdefault((repo, item["number"]), set()).add("search")
+        add_candidate(repo, item["number"], "search")
     if len(candidates) > max_prs:
         omissions.append(f"PR details capped at {max_prs} of {len(candidates)} candidates.")
+    # Stable priority keeps target-repository candidates within the bounded detail budget.
+    ordered_candidates = sorted(
+        candidates.items(), key=lambda item: item[0][0].casefold() != repo.casefold()
+    )
     prs = []
-    for (pr_repo, pr_number), origins in list(candidates.items())[:max_prs]:
+    for (pr_repo, pr_number), origins in ordered_candidates[:max_prs]:
         try:
             pr = api.get(f"repos/{pr_repo}/pulls/{pr_number}")
         except GitHubError:
@@ -372,9 +383,10 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
         closing_match = _closing_reference(pr, repo, number)
         closing = closing_match is not None
         state = "merged" if pr.get("merged") else pr["state"]
+        base_repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name") or pr_repo
         prs.append(
             dict(
-                repository=pr_repo,
+                repository=base_repo,
                 number=pr_number,
                 title=pr["title"],
                 url=pr["html_url"],
@@ -392,6 +404,16 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
                     pr["html_url"],
                     str(pr.get("body") or ""),
                     closing_match,
+                )
+            )
+        elif not closing and base_repo.casefold() != repo.casefold():
+            findings.append(
+                _finding(
+                    "related_pr",
+                    "review",
+                    f"PR {base_repo}#{pr_number} from another repository is mentioned or linked; "
+                    "its implementation relevance is not established.",
+                    pr["html_url"],
                 )
             )
         elif state == "closed" and (closing or "timeline" in origins):
