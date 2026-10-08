@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Follow recognizable explicit AI, agent, and contribution policy links, including reference-style links, to supported text files in the same repository.
+- Resolve repository-relative, parent-directory, root-path, and supported GitHub `blob` links at the report's pinned commit rather than the link's branch or SHA.
+- Report missing, failed, unsupported, external, and ambiguous linked policies as evidence gaps. Limit discovery to six contents requests, including failed requests and default probes.
+- Add `approval_policy` review findings with source lines and excerpts when a PR must link a maintainer-approved solution; approval itself is not verified.
+- Include a Rich snapshot demonstrating a previously omitted AI policy, and update installation examples to the 0.1.2 wheel.
+
 ## 0.1.1
 
 - Report exact pinned policy lines and original text excerpts for detected rules, maintainer stop requests, and existing fix declarations.

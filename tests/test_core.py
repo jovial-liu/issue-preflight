@@ -536,3 +536,197 @@ def test_inline_negation_is_not_erased_into_an_assignment_requirement():
 def test_inline_code_does_not_cross_a_paragraph_interrupting_fence():
     body = 'An unmatched backtick `\n```python\nprint("`")\n```\nFixes #42'
     assert closes_issue(pr(body=body), REPO, 42)
+
+
+APPROVAL_RULE = (
+    "The Pull Request must link to a issue or discussion where a solution "
+    "has been approved by a maintainer (@example)."
+)
+
+
+class LinkedPolicyAPI(FixtureAPI):
+    def __init__(self, policies):
+        super().__init__()
+        self.policies = policies
+
+    def get(self, endpoint):
+        from urllib.parse import unquote
+
+        prefix = f"repos/{REPO}/contents/"
+        if endpoint.startswith(prefix):
+            self.calls.append(endpoint)
+            path, query = endpoint[len(prefix) :].split("?", 1)
+            assert query == f"ref={SHA}"
+            value = self.policies.get(unquote(path))
+            if value is None:
+                raise NotFound()
+            if isinstance(value, GitHubError):
+                raise value
+            if not isinstance(value, str):
+                return value
+            raw = value.encode("utf-8")
+            return dict(encoding="base64", size=len(raw), content=base64.b64encode(raw).decode())
+        return super().get(endpoint)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "AI_POLICY.md",
+        f"https://github.com/{REPO}/blob/master/AI_POLICY.md",
+        f"https://github.com/{REPO.upper()}/blob/{'b' * 40}/AI_POLICY.md?plain=1#L5",
+    ],
+)
+def test_linked_ai_policy_is_read_at_the_report_snapshot_and_reported(url):
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": f"# Contributing\n\nSee [AI policy]({url}) when using AI.\n",
+            "AI_POLICY.md": "# AI policy\n\n" + APPROVAL_RULE + "\n",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert {p["path"] for p in result["policy_sources"]} == {"CONTRIBUTING.md", "AI_POLICY.md"}
+    finding = next(f for f in result["findings"] if f["code"] == "approval_policy")
+    assert finding["severity"] == "review"
+    assert finding["url"] == f"https://github.com/{REPO}/blob/{SHA}/AI_POLICY.md#L3"
+    assert finding["excerpt"] == APPROVAL_RULE
+    assert "not verified" in finding["message"]
+
+
+def test_linked_policy_can_return_to_repo_root_from_a_nested_guide():
+    api = LinkedPolicyAPI(
+        {
+            ".github/CONTRIBUTING.md": "[AI policy](../AI_POLICY.md)",
+            "AI_POLICY.md": APPROVAL_RULE,
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert "approval_policy" in codes(result)
+    assert result["collection_gaps"] == []
+
+
+def test_root_relative_policy_link_uses_the_repository_root():
+    api = LinkedPolicyAPI(
+        {
+            ".github/CONTRIBUTING.md": "[AI policy](/docs/AI_POLICY.md)",
+            "docs/AI_POLICY.md": APPROVAL_RULE,
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert {p["path"] for p in result["policy_sources"]} == {
+        ".github/CONTRIBUTING.md",
+        "docs/AI_POLICY.md",
+    }
+
+
+@pytest.mark.parametrize("problem", [None, GitHubError("denied"), []])
+def test_explicit_policy_link_failure_remains_visible(problem):
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": "[AI policy](AI_POLICY.md)",
+            "AI_POLICY.md": problem,
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert any("AI_POLICY.md" in gap for gap in result["collection_gaps"])
+
+
+def test_probe_404_is_not_hidden_when_a_later_guide_explicitly_links_it():
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": "[Contributing guide](docs/contributing.md)",
+            "docs/contributing.md": "[Agent policy](../AGENTS.md)",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert sum("/contents/AGENTS.md?" in call for call in api.calls) == 1
+    assert any("AGENTS.md" in gap for gap in result["collection_gaps"])
+
+
+def test_policy_link_cycles_and_path_aliases_are_fetched_once():
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": (
+                "[AI policy](docs/../AI_POLICY.md) "
+                "[AI policy again](AI%5FPOLICY.md) "
+                "[Contribution guide](CONTRIBUTING.md)"
+            ),
+            "AI_POLICY.md": "[Contribution guide](CONTRIBUTING.md)",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    calls = [call for call in api.calls if "/contents/" in call]
+    assert len(calls) == len(set(calls)) == 4
+    assert result["collection_gaps"] == []
+
+
+def test_six_policy_request_budget_includes_missing_probe_files():
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": " ".join(f"[AI policy](docs/AI_POLICY_{i}.md)" for i in range(8)),
+            **{f"docs/AI_POLICY_{i}.md": "Read this policy." for i in range(8)},
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert sum("/contents/" in call for call in api.calls) == 6
+    assert any("capped at six" in gap for gap in result["collection_gaps"])
+
+
+def test_unfetched_external_policy_is_an_evidence_gap_without_credentials():
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": "[AI policy](https://user:secret@elsewhere.example/AI_POLICY.md)",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert result["collection_gaps"]
+    assert "secret" not in str(result)
+    assert not any("elsewhere.example" in call for call in api.calls)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        "After code review, a maintainer may approve the Pull Request.",
+        "You may want to discuss a solution before submitting a Pull Request.",
+        f"Example:\n\n```\n{APPROVAL_RULE}\n```",
+        f"<!-- {APPROVAL_RULE} -->",
+    ],
+)
+def test_optional_or_example_approval_is_not_a_requirement(policy):
+    assert "approval_policy" not in codes(inspect(FixtureAPI(policy), "example/project#42"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        dict(encoding="base64", size=3, content="!!!"),
+        dict(encoding="base64", size=1, content=base64.b64encode(b"\xff").decode()),
+        dict(encoding="base64", size=0, content=base64.b64encode(b"x" * 80001).decode()),
+    ],
+)
+def test_linked_policy_invalid_or_oversized_payload_is_not_silently_accepted(payload):
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": "[AI policy](AI_POLICY.md)",
+            "AI_POLICY.md": payload,
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert any("AI_POLICY.md" in gap for gap in result["collection_gaps"])
+    assert {p["path"] for p in result["policy_sources"]} == {"CONTRIBUTING.md"}
+
+
+def test_wrapped_approval_rule_keeps_exact_source_line_range():
+    api = FixtureAPI(
+        "The Pull Request must link to an issue where a solution\n"
+        "has been approved by a maintainer.\n"
+    )
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "approval_policy")
+    assert finding["url"].endswith("#L1-L2")
+    assert finding["line_start"] == 1 and finding["line_end"] == 2
