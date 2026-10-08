@@ -234,6 +234,7 @@ def test_policy_that_welcomes_agents_is_not_a_prohibition():
         "Code must be **reviewed** by **a human**.",
         "Code must be __reviewed__\r\nby a __human__.",
         "Human review is required before submitting a PR.",
+        "Use a human-in-the-loop team before submitting a PR.",
     ],
 )
 def test_human_review_policy_keeps_original_evidence(clause):
@@ -258,6 +259,8 @@ def test_human_review_policy_keeps_original_evidence(clause):
         "Code is reviewed by a human-like bot.",
         "Code is reviewed by a human–like bot.",
         "Code is reviewed by a __human-like bot__.",
+        "Code is reviewed by a human-like review bot.",
+        "Code is reviewed by a human–like reviewer.",
         "The reviewed_by_human field must be true.",
         "The __reviewed_by_human__ field must be true.",
         "The review document is written by a human.",
