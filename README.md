@@ -14,7 +14,7 @@ Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first examp
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.1/issue_preflight-0.1.1-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.2/issue_preflight-0.1.2-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.1/issue_preflight-0.1.1-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.2/issue_preflight-0.1.2-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -34,13 +34,17 @@ python -m issue_preflight 'OWNER/REPO#123'
 | Issue state and assignees | Whether the issue is closed or someone is already assigned |
 | PRs in the timeline, discussion links, and search | Which proposals might overlap, including closed PRs |
 | Explicit closing references | Whether a PR says it fixes this exact issue; `#12` does not match `#123` |
-| Contribution guides and `AGENTS.md` | Recognizable assignment, AI disclosure, and autonomous-agent rules |
+| Contribution guides, `AGENTS.md`, and linked policies | Recognizable assignment, proposal approval, AI disclosure, and autonomous-agent rules |
 | Maintainer messages | Whether a maintainer explicitly says not to open another PR |
 | Collection limits and API failures | Where the evidence is incomplete |
 
 Contribution files are read at one pinned commit. Detected policy rules include exact line links and bounded original excerpts. Issues and discussions are a timestamped live snapshot and can change during the scan. The CLI evaluates your authenticated `gh` user by default; use `--actor LOGIN` to evaluate someone else. Identity lookup failures appear as collection gaps.
 
-## A real example
+The scan starts with `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `AGENTS.md`, then follows recognizable explicit links to AI, agent, and contribution policies, including reference-style links. Supported text targets in the same repository can use relative paths, parent directories within the repository, root paths, or GitHub `blob` URLs. Every fetched file uses the report's pinned commit, including links written with an older branch or SHA. The budget is **six contents requests total**, including default probes, missing files, and failed requests. Explicit linked files that are missing, inaccessible, unsupported, external, or ambiguous appear as collection gaps.
+
+An `approval_policy` finding has severity `review`: a detected rule requires a PR to link an issue or discussion containing a maintainer-approved solution. Read the quoted rule and its scope, which may specifically cover AI-generated contributions. The scan does not verify whether an approved solution already exists.
+
+## Real examples
 
 On October 9, 2026, scanning `modelcontextprotocol/python-sdk#3656` found:
 
@@ -49,6 +53,8 @@ On October 9, 2026, scanning `modelcontextprotocol/python-sdk#3656` found:
 - The resulting decision was `hold`, with links to the PR and pinned policy documents.
 
 The report preserves the distinction: a **closed** PR deserves investigation; it does not prove that the issue has been fixed. See the [recorded snapshot](examples/mcp-audio.md), and rerun the command to get current evidence.
+
+For `Textualize/rich#4225`, the earlier scan already returned `review` because of a closed related PR, but missed the linked AI policy. At pinned commit `9d8f9a372cc5916fd4781fec207ced7ddac2f08f`, [CONTRIBUTING.md line 9](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/CONTRIBUTING.md#L9) links to `master/AI_POLICY.md`. Version 0.1.2 reads that file at the same pinned commit and adds the [line 5 approval rule](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/AI_POLICY.md#L5) for AI-generated PRs. See the [recorded policy report](examples/rich-ai-policy.md); it cites the requirement without checking whether a solution has already been approved.
 
 ## Use it in an agent workflow
 
@@ -71,7 +77,7 @@ By default, a completed report exits 0. `--fail-on-hold` exits 2 for `hold`; `--
 
 ## Limits
 
-Policy detection is heuristic and currently recognizes English phrasing. Contribution rules can live outside the checked Markdown paths, a quoted rule can be ambiguous, and trusted-contributor exceptions may require a maintainer's judgment. Common code examples and HTML comments are excluded, but the classifier is not a complete Markdown parser. Closing references show stated intent; automatic closure also depends on GitHub's default-branch rules.
+Policy detection is heuristic and currently recognizes English phrasing. Contribution rules can live outside the checked paths, a quoted rule can be ambiguous, and trusted-contributor exceptions may require a maintainer's judgment. Common code examples and HTML comments are excluded, but text handling and link discovery are not a complete Markdown parser. A `blob` URL with an unknown ref and a nested file path may be ambiguous; it is reported as a gap. Closing references show stated intent; automatic closure also depends on GitHub's default-branch rules.
 
 PR search discovers references, not semantic equivalence; a differently worded competing fix can be missed. This REST scan does not resolve current manual links in the Development sidebar or infer fixes from commit messages. Manual-link events are reported as collection gaps. Read the sources rather than treating any decision as a guarantee of completeness or acceptance.
 

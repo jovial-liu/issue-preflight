@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 from .github import GitHubError, NotFound
+from .policy_links import policy_links
 from .text import prose
 
 REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -116,43 +117,67 @@ def _pages(api: API, endpoint: str, omissions: list[str], limit: int = 2) -> lis
 def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> list[dict]:
     documents: list[dict] = []
     queue = list(POLICY_PATHS)
-    visited: set[str] = set()
-    while queue and len(visited) < 6:
+    states: dict[str, str] = {}
+    explicit: set[str] = set()
+
+    def missing_link(path: str) -> None:
+        gap = f"Linked policy not found or inaccessible: {path}"
+        if gap not in omissions:
+            omissions.append(gap)
+
+    while queue and len(states) < 6:
         path = queue.pop(0)
-        if path in visited:
+        if path in states:
             continue
-        visited.add(path)
+        states[path] = "failed"  # Every actual contents request uses the same bounded budget.
         try:
             result = api.get(f"repos/{repo}/contents/{quote(path)}?ref={sha}")
         except NotFound:
+            states[path] = "missing"
+            if path in explicit:
+                missing_link(path)
             continue
         except GitHubError:
             omissions.append(f"Could not read policy: {path}")
             continue
-        if result.get("encoding") != "base64" or result.get("size", 0) > 80000:
+        if not isinstance(result, dict):
+            omissions.append(f"Policy did not return a supported text file: {path}")
+            continue
+        if (
+            result.get("encoding") != "base64"
+            or not isinstance(result.get("size"), int)
+            or result["size"] > 80000
+            or not isinstance(result.get("content"), str)
+        ):
             omissions.append(f"Policy unsupported or larger than 80 KB: {path}")
             continue
         try:
-            text = base64.b64decode(result["content"]).decode("utf-8")
+            raw = base64.b64decode("".join(result["content"].split()), validate=True)
+            if len(raw) > 80000:
+                omissions.append(f"Policy larger than 80 KB: {path}")
+                continue
+            text = raw.decode("utf-8")
         except (ValueError, KeyError, UnicodeError):
             omissions.append(f"Could not decode policy: {path}")
             continue
+        states[path] = "fetched"
         documents.append(
             dict(path=path, text=text, url=f"https://github.com/{repo}/blob/{sha}/{quote(path)}")
         )
-        # Follow local contribution guides, never arbitrary external URLs or traversal paths.
-        for link in re.findall(r"\]\(([^)\s#]+)(?:#[^)]*)?\)", text):
-            if "contribut" not in link.lower() or ":" in link:
+        for link in policy_links(text, repo, path):
+            if link.path is None:
+                gap = f"Linked policy in {path}: {link.reason}"
+                if gap not in omissions:
+                    omissions.append(gap)
                 continue
-            parts = link.split("/")
-            if ".." in parts or link.startswith("/"):
-                continue
-            parent = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
-            if link.startswith("./"):
-                link = link[2:]
-            queue.append(parent + link)
-    if any(path not in visited for path in queue):
-        omissions.append("Linked contribution guide discovery capped at six files.")
+            explicit.add(link.path)
+            if states.get(link.path) == "missing":
+                # Default probes may 404 before a later document explicitly links them.
+                missing_link(link.path)
+            if link.path not in states and link.path not in queue:
+                queue.append(link.path)
+    if any(path not in states for path in queue):
+        omissions.append("Linked policy discovery capped at six file requests.")
     return documents
 
 
@@ -215,6 +240,26 @@ def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) ->
                     doc["url"],
                     doc["text"],
                     human_rule,
+                    doc["path"],
+                )
+            )
+        approval_rule = re.search(
+            r"\b(?:pull\s+requests?|PRs?)\s+must\s+link\s+to\b[^\x00]{0,160}"
+            r"\b(?:issue|discussion)\b[^\x00]{0,80}\b(?:solution|proposal)\b"
+            r"\s+has\s+been\s+approved\s+by\s+(?:a|the)\s+maintainer\b",
+            text,
+            re.IGNORECASE,
+        )
+        if approval_rule:
+            findings.append(
+                _source_finding(
+                    "approval_policy",
+                    "review",
+                    "Policy requires a PR to link an approved issue or proposal. "
+                    "Read its scope; approval was not verified by this scan.",
+                    doc["url"],
+                    doc["text"],
+                    approval_rule,
                     doc["path"],
                 )
             )
