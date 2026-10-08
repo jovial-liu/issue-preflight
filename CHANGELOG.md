@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Add an explicit `scan OWNER/REPO` command that selects up to five recently updated open issues by default (maximum ten), excluding PRs, and reuses the full single-issue evidence checks.
 - Distinguish normal selection truncation, listing exhaustion, two-page caps, identity gaps, and API failures. Preserve partial per-issue results with exit 1 for required fetch failures.
