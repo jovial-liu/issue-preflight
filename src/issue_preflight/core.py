@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 from .github import GitHubError, NotFound
-from .policy_links import policy_links
+from .policy_links import DOCUMENT_SUFFIXES, EXTENSIONLESS_GUIDES, policy_links
 from .text import prose, without_emphasis
 
 REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -19,6 +19,7 @@ URL_TARGET = re.compile(
 )
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 POLICY_PATHS = ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "AGENTS.md")
+POLICY_FALLBACK_PATHS = ("docs/contributing.md", "docs/contributing.rst")
 
 
 class API(Protocol):
@@ -114,21 +115,43 @@ def _pages(api: API, endpoint: str, omissions: list[str], limit: int = 2) -> lis
     return items
 
 
+def _has_policy_text(text: str) -> bool:
+    return bool(text.removeprefix("\ufeff").strip())
+
+
+def _contribution_guide_path(path: str) -> bool:
+    basename = path.rsplit("/", 1)[-1].casefold()
+    if "." in basename:
+        name, suffix = basename.rsplit(".", 1)
+        return name in EXTENSIONLESS_GUIDES and suffix in DOCUMENT_SUFFIXES
+    return basename in EXTENSIONLESS_GUIDES
+
+
 def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> list[dict]:
     documents: list[dict] = []
-    queue = list(POLICY_PATHS)
+    queue: list[str] = []
+    probes = list(POLICY_PATHS)
+    fallbacks = list(POLICY_FALLBACK_PATHS)
     states: dict[str, str] = {}
     explicit: set[str] = set()
+    guide_found = False
 
     def missing_link(path: str) -> None:
         gap = f"Linked policy not found or inaccessible: {path}"
         if gap not in omissions:
             omissions.append(gap)
 
-    while queue and len(states) < 6:
-        path = queue.pop(0)
-        if path in states:
-            continue
+    while len(states) < 6:
+        path = None
+        # Explicit evidence precedes filename guesses, even for a queued probe.
+        for candidates in (queue, probes, fallbacks if not guide_found else []):
+            while candidates and candidates[0] in states:
+                candidates.pop(0)
+            if candidates:
+                path = candidates.pop(0)
+                break
+        if path is None:
+            break
         states[path] = "failed"  # Every actual contents request uses the same bounded budget.
         try:
             result = api.get(f"repos/{repo}/contents/{quote(path)}?ref={sha}")
@@ -161,9 +184,16 @@ def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> li
             omissions.append(f"Could not decode policy: {path}")
             continue
         states[path] = "fetched"
+        if _has_policy_text(text) and _contribution_guide_path(path):
+            guide_found = True
         documents.append(
             dict(path=path, text=text, url=f"https://github.com/{repo}/blob/{sha}/{quote(path)}")
         )
+        if path.casefold().endswith(".rst") and _has_policy_text(text):
+            omissions.append(
+                "RST policy formatting is not supported by automated rule detection; "
+                f"review source: {path}"
+            )
         for link in policy_links(text, repo, path):
             if link.path is None:
                 gap = f"Linked policy in {path}: {link.reason}"
@@ -178,12 +208,18 @@ def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> li
                 queue.append(link.path)
     if any(path not in states for path in queue):
         omissions.append("Linked policy discovery capped at six file requests.")
+    elif any(path not in states for path in probes) or (
+        not guide_found and any(path not in states for path in fallbacks)
+    ):
+        omissions.append("Policy discovery capped at six file requests.")
     return documents
 
 
 def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) -> list[dict]:
     findings = []
     for doc in documents:
+        if doc["path"].casefold().endswith(".rst"):
+            continue  # Preserve the source and format gap rather than parse RST as Markdown.
         # Detect only recognizable rules; all other policy text remains available to review.
         text = prose(doc["text"])
         autonomous_rule = re.search(
@@ -437,7 +473,7 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
     branch = metadata["default_branch"]
     commit = api.get(f"repos/{repo}/commits/{quote(branch, safe='')}")
     documents = _policy_documents(api, repo, commit["sha"], omissions)
-    if not documents:
+    if not any(_has_policy_text(doc["text"]) for doc in documents):
         omissions.append(
             "No contribution policy was found in the checked paths; rules may live elsewhere."
         )

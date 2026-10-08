@@ -7,7 +7,7 @@ from copy import deepcopy
 import pytest
 
 from issue_preflight import cli
-from issue_preflight.core import closes_issue, inspect, parse_target
+from issue_preflight.core import _policy_documents, closes_issue, inspect, parse_target
 from issue_preflight.github import GitHubError, NotFound
 
 REPO = "example/project"
@@ -972,3 +972,323 @@ def test_wrapped_approval_rule_keeps_exact_source_line_range():
     finding = next(f for f in result["findings"] if f["code"] == "approval_policy")
     assert finding["url"].endswith("#L1-L2")
     assert finding["line_start"] == 1 and finding["line_end"] == 2
+
+
+def policy_requests(api):
+    return [
+        call.split("/contents/", 1)[1].split("?", 1)[0]
+        for call in api.calls
+        if "/contents/" in call
+    ]
+
+
+@pytest.mark.parametrize("path,count", [("docs/contributing.md", 4), ("docs/contributing.rst", 5)])
+def test_fallback_collects_nested_contribution_guide(path, count):
+    api = LinkedPolicyAPI({path: "Contributions welcome; run the test suite."})
+    result = inspect(api, "example/project#42")
+    assert result["policy_sources"] == [
+        {"path": path, "url": f"https://github.com/{REPO}/blob/{SHA}/{path}"}
+    ]
+    assert len(policy_requests(api)) == count
+    assert not any("No contribution policy" in gap for gap in result["collection_gaps"])
+    if path.endswith(".rst"):
+        assert any("RST policy formatting" in gap for gap in result["collection_gaps"])
+        assert result["decision"] == "review"
+    else:
+        assert result["collection_gaps"] == []
+        assert result["decision"] == "no_obvious_blockers"
+
+
+def test_fallback_reads_contribution_guide_alongside_agents_document():
+    api = LinkedPolicyAPI(
+        {"AGENTS.md": "Use the project's tools.", "docs/contributing.md": APPROVAL_RULE}
+    )
+    result = inspect(api, "example/project#42")
+    assert {doc["path"] for doc in result["policy_sources"]} == {
+        "AGENTS.md",
+        "docs/contributing.md",
+    }
+    assert "approval_policy" in codes(result)
+    assert "docs/contributing.rst" not in policy_requests(api)
+
+
+def test_fallback_prioritizes_rich_style_ai_link_before_probe_files():
+    api = LinkedPolicyAPI(
+        {
+            "CONTRIBUTING.md": f"See [AI policy](https://github.com/{REPO}/blob/master/AI_POLICY.md).",
+            "AI_POLICY.md": "# AI\n\n" + APPROVAL_RULE + "\n",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert policy_requests(api) == [
+        "CONTRIBUTING.md",
+        "AI_POLICY.md",
+        ".github/CONTRIBUTING.md",
+        "AGENTS.md",
+    ]
+    finding = next(f for f in result["findings"] if f["code"] == "approval_policy")
+    assert finding["url"] == f"https://github.com/{REPO}/blob/{SHA}/AI_POLICY.md#L3"
+    assert finding["excerpt"] == APPROVAL_RULE
+    assert all(call.endswith(f"ref={SHA}") for call in api.calls if "/contents/" in call)
+
+
+def test_fallback_promotes_a_pending_primary_probe_when_explicitly_linked():
+    api = LinkedPolicyAPI(
+        {"CONTRIBUTING.md": "[Agent rules](AGENTS.md)", "AGENTS.md": "Read these rules."}
+    )
+    inspect(api, "example/project#42")
+    assert policy_requests(api) == ["CONTRIBUTING.md", "AGENTS.md", ".github/CONTRIBUTING.md"]
+
+
+def test_fallback_link_keeps_relative_path_snapshot_and_original_crlf_lines():
+    rule = (
+        "The Pull Request must link to an issue where a solution\r\n"
+        "has been approved by a maintainer."
+    )
+    api = LinkedPolicyAPI(
+        {
+            "docs/contributing.md": "See [AI policy][rules].\r\n\r\n[rules]: ../AI_POLICY.md\r\n",
+            "AI_POLICY.md": "# AI\r\n\r\n" + rule + "\r\n",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "approval_policy")
+    assert finding["path"] == "AI_POLICY.md"
+    assert finding["url"] == f"https://github.com/{REPO}/blob/{SHA}/AI_POLICY.md#L3-L4"
+    assert finding["line_start"] == 3 and finding["line_end"] == 4
+    assert finding["excerpt"] == rule
+    assert policy_requests(api)[-2:] == ["docs/contributing.md", "AI_POLICY.md"]
+    assert all(call.endswith(f"ref={SHA}") for call in api.calls if "/contents/" in call)
+
+
+def test_fallback_rst_links_share_the_remaining_single_request():
+    api = LinkedPolicyAPI(
+        {
+            "docs/contributing.rst": (
+                "[AI policy](../AI_POLICY.md) [Agent rules](../AGENT_RULES.md)"
+            ),
+            "AI_POLICY.md": APPROVAL_RULE,
+            "AGENT_RULES.md": "Read the rules.",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert len(policy_requests(api)) == 6
+    assert policy_requests(api)[-1] == "AI_POLICY.md"
+    assert "AGENT_RULES.md" not in policy_requests(api)
+    assert "approval_policy" in codes(result)
+    assert any("capped at six" in gap for gap in result["collection_gaps"])
+
+
+def test_fallback_budget_gap_reports_primary_probes_omitted_by_explicit_files():
+    files = {f"docs/AI_POLICY_{i}.md": "Read this policy." for i in range(5)}
+    api = LinkedPolicyAPI(
+        {"CONTRIBUTING.md": " ".join(f"[AI policy]({path})" for path in files), **files}
+    )
+    result = inspect(api, "example/project#42")
+    assert policy_requests(api) == ["CONTRIBUTING.md", *files]
+    assert len(result["policy_sources"]) == 6
+    assert "Policy discovery capped at six file requests." in result["collection_gaps"]
+
+
+def test_fallback_explicit_missing_link_does_not_retry_prior_404():
+    api = LinkedPolicyAPI({"docs/contributing.md": "[Agent policy](../AGENTS.md)"})
+    result = inspect(api, "example/project#42")
+    assert policy_requests(api).count("AGENTS.md") == 1
+    assert "Linked policy not found or inaccessible: AGENTS.md" in result["collection_gaps"]
+    assert len(policy_requests(api)) == 4
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        None,
+        GitHubError("denied"),
+        [],
+        dict(encoding="none", size=0, content=""),
+        dict(encoding="base64", size=80001, content=""),
+        dict(encoding="base64", size=3, content="!!!"),
+        dict(encoding="base64", size=1, content=base64.b64encode(b"\xff").decode()),
+        dict(encoding="base64", size=0, content=base64.b64encode(b"x" * 80001).decode()),
+    ],
+)
+def test_fallback_explicit_failures_spend_the_shared_request_budget(problem):
+    files = {f"docs/AI_POLICY_{i}.md": "Read this policy." for i in range(8)}
+    files["docs/AI_POLICY_0.md"] = problem
+    api = LinkedPolicyAPI(
+        {"CONTRIBUTING.md": " ".join(f"[AI policy]({path})" for path in files), **files}
+    )
+    result = inspect(api, "example/project#42")
+    assert policy_requests(api) == ["CONTRIBUTING.md", *list(files)[:5]]
+    assert len(result["policy_sources"]) == 5
+    assert any("AI_POLICY_0.md" in gap for gap in result["collection_gaps"])
+    assert any("capped at six" in gap for gap in result["collection_gaps"])
+
+
+def test_fallback_success_does_not_hide_a_primary_request_failure():
+    api = LinkedPolicyAPI(
+        {
+            ".github/CONTRIBUTING.md": GitHubError("denied"),
+            "docs/contributing.md": "Contributions welcome.",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert "Could not read policy: .github/CONTRIBUTING.md" in result["collection_gaps"]
+    assert len(policy_requests(api)) == 4
+    assert {doc["path"] for doc in result["policy_sources"]} == {"docs/contributing.md"}
+
+
+def test_fallback_cycles_and_aliases_do_not_repeat_requests_or_create_a_cap_gap():
+    api = LinkedPolicyAPI(
+        {
+            "docs/contributing.md": (
+                "[AI policy](../AI_POLICY.md) [AI rules](../docs/../AI_POLICY.md) "
+                "[Contribution guide](./contributing.md)"
+            ),
+            "AI_POLICY.md": "[Contribution guide](docs/contributing.md)",
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert len(policy_requests(api)) == len(set(policy_requests(api))) == 5
+    assert result["collection_gaps"] == []
+
+
+def test_fallback_retains_sanitized_external_and_unsafe_link_gaps():
+    api = LinkedPolicyAPI(
+        {
+            "docs/contributing.md": (
+                "[AI policy](https://user:secret@example.org/AI_POLICY.md) "
+                "[Agent rules](../../AGENTS.md) [Policy](AI_POLICY.pdf)"
+            )
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert len(policy_requests(api)) == 4
+    assert len(result["collection_gaps"]) == 3
+    assert "secret" not in str(result)
+    assert not any("example.org" in call for call in api.calls)
+    assert result["decision"] == "review"
+
+
+def test_fallback_poetry_navigation_keeps_current_resolver_gaps():
+    api = LinkedPolicyAPI(
+        {
+            "docs/contributing.md": (
+                "Pick an issue from the [contributing page]"
+                f"(https://github.com/{REPO}/contribute).\n"
+                "Read this [guide](https://docs.github.com/en/get-started/quickstart/"
+                "contributing-to-projects).\n"
+            )
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert result["collection_gaps"] == [
+        "Linked policy in docs/contributing.md: Policy link is not a supported GitHub file link.",
+        "Linked policy in docs/contributing.md: External policy link is not collected.",
+    ]
+    assert len(policy_requests(api)) == 4
+
+
+def test_fallback_missing_files_still_leave_an_evidence_gap():
+    api = LinkedPolicyAPI({})
+    result = inspect(api, "example/project#42")
+    assert len(policy_requests(api)) == 5
+    assert result["policy_sources"] == []
+    assert result["decision"] == "review"
+    assert any("No contribution policy" in gap for gap in result["collection_gaps"])
+
+
+@pytest.mark.parametrize("blank", [" \t\r\n", "\ufeff\r\n"])
+def test_fallback_all_blank_documents_are_not_complete_guidance(blank):
+    paths = [
+        "CONTRIBUTING.md",
+        ".github/CONTRIBUTING.md",
+        "AGENTS.md",
+        "docs/contributing.md",
+        "docs/contributing.rst",
+    ]
+    api = LinkedPolicyAPI(dict.fromkeys(paths, blank))
+    result = inspect(api, "example/project#42")
+    assert policy_requests(api) == paths
+    assert {doc["path"] for doc in result["policy_sources"]} == set(paths)
+    assert result["decision"] == "review"
+    assert any("No contribution policy" in gap for gap in result["collection_gaps"])
+
+
+@pytest.mark.parametrize("blank", ["", " \t\r\n", "\ufeff\r\n"])
+def test_fallback_blank_root_guide_does_not_suppress_a_readable_docs_guide(blank):
+    api = LinkedPolicyAPI({"CONTRIBUTING.md": blank, "docs/contributing.md": APPROVAL_RULE})
+    result = inspect(api, "example/project#42")
+    assert "approval_policy" in codes(result)
+    assert len(policy_requests(api)) == 4
+    assert result["collection_gaps"] == []
+
+
+@pytest.mark.parametrize("blank", ["", " \t\r\n", "\ufeff\r\n"])
+def test_fallback_only_a_blank_root_guide_requires_review(blank):
+    api = LinkedPolicyAPI({"CONTRIBUTING.md": blank})
+    result = inspect(api, "example/project#42")
+    assert len(policy_requests(api)) == 5
+    assert result["decision"] == "review"
+    assert result["collection_gaps"]
+
+
+def test_fallback_request_identity_preserves_filename_case():
+    api = LinkedPolicyAPI(
+        {
+            "AGENTS.md": "Project tooling.",
+            "docs/contributing.md": "[Agent rules](../agents.md)",
+            "agents.md": APPROVAL_RULE,
+        }
+    )
+    result = inspect(api, "example/project#42")
+    assert policy_requests(api)[-2:] == ["docs/contributing.md", "agents.md"]
+    assert "AGENTS.md" in policy_requests(api)
+    assert "approval_policy" in codes(result)
+
+
+@pytest.mark.parametrize("problem", [[], dict(encoding="base64", size=3, content="!!!")])
+def test_fallback_bad_markdown_payload_does_not_suppress_rst_probe(problem):
+    api = LinkedPolicyAPI(
+        {"docs/contributing.md": problem, "docs/contributing.rst": "Contributions welcome."}
+    )
+    result = inspect(api, "example/project#42")
+    assert len(policy_requests(api)) == 5
+    assert {doc["path"] for doc in result["policy_sources"]} == {"docs/contributing.rst"}
+    assert any("docs/contributing.md" in gap for gap in result["collection_gaps"])
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        ".. code-block:: text\n\n   The author must be assigned.\n",
+        ".. This is a comment.\n   The author must be assigned.\n",
+        "The author must\r\nbe assigned.\r\n",
+        "The Pull Request must link to an issue where a solution\r\n"
+        "has been approved by a maintainer.\r\n",
+    ],
+)
+def test_fallback_rst_sources_require_review_without_markdown_rule_detection(body):
+    text = "Contributing\r\n============\r\n\r\n" + body
+    policies = {
+        "CONTRIBUTING.md": "[Contribution guide](docs/contributing.rst)",
+        "docs/contributing.rst": text,
+    }
+    result = inspect(LinkedPolicyAPI(policies), "example/project#42")
+    assert "assignment_policy" not in codes(result)
+    assert "approval_policy" not in codes(result)
+    assert result["decision"] == "review"
+    assert any("RST policy formatting" in gap for gap in result["collection_gaps"])
+    assert {doc["path"]: doc["url"] for doc in result["policy_sources"]}[
+        "docs/contributing.rst"
+    ] == f"https://github.com/{REPO}/blob/{SHA}/docs/contributing.rst"
+    documents = _policy_documents(LinkedPolicyAPI(policies), REPO, SHA, [])
+    assert next(doc["text"] for doc in documents if doc["path"] == "docs/contributing.rst") == text
+
+
+def test_fallback_blank_rst_does_not_add_a_format_gap_or_supply_guidance():
+    api = LinkedPolicyAPI({"docs/contributing.rst": "\ufeff\r\n"})
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert any("No contribution policy" in gap for gap in result["collection_gaps"])
+    assert not any("RST policy formatting" in gap for gap in result["collection_gaps"])
+    assert len(policy_requests(api)) == 5

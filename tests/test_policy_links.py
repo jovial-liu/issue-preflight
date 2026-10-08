@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from issue_preflight.policy_links import PolicyLink, policy_links
@@ -238,3 +244,90 @@ def test_links_outside_examples_are_preserved_and_canonical_paths_are_deduplicat
     text = "```\n[AI policy](FAKE_POLICY.md)\n```\n\n[AI policy](./AI_POLICY.md#x) "
     text += "[AI policy](docs/../AI_POLICY.md?plain=1) [Agent policy](AGENTS.md)"
     assert links(text) == [PolicyLink("AI_POLICY.md"), PolicyLink("AGENTS.md")]
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["[" * 79_000, ("[unclosed" * 8_000)],
+    ids=["open-brackets", "unclosed-labels"],
+)
+def test_unclosed_labels_at_file_limit_do_not_stall_or_hide_the_next_line(prefix):
+    # Isolate a possible parser stall so a regression cannot hang the test runner.
+    text = prefix + "\r\n[AI policy](AI_POLICY.md)"
+    assert len(text.encode()) < 80_000
+    assert bounded_links(text) == ["AI_POLICY.md"]
+
+
+def bounded_links(text):
+    code = (
+        "import json, sys; from issue_preflight.policy_links import policy_links; "
+        "print(json.dumps([link.path for link in "
+        "policy_links(sys.stdin.read(), 'example/project', 'CONTRIBUTING.md')]))"
+    )
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=text,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=True,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix", "expected"),
+    [
+        ("[AI policy](", ")", [None]),
+        ('[AI policy](AI_POLICY.md "', '")', ["AI_POLICY.md"]),
+    ],
+    ids=["escaped-destination", "escaped-title"],
+)
+def test_long_escape_runs_do_not_stall(prefix, suffix, expected):
+    text = prefix + "\\" * 79_000 + suffix
+    assert len(text.encode()) < 80_000
+    assert bounded_links(text) == expected
+
+
+def test_reference_definitions_with_crlf_preserve_the_destination():
+    text = "[AI policy][rules]\r\n\r\n[rules]: ../AI_POLICY.md\r\n"
+    assert links(text, "docs/contributing.md") == [PolicyLink("AI_POLICY.md")]
+
+
+def test_reference_occurrences_use_their_original_offsets_after_an_inline_link():
+    text = (
+        "[AI policy](AI_POLICY.md) [Agent policy][agents] [AI rules][rules]\n\n"
+        "[agents]: AGENTS.md\n[rules]: AI_RULES.md\n"
+    )
+    assert links(text) == [
+        PolicyLink("AI_POLICY.md"),
+        PolicyLink("AGENTS.md"),
+        PolicyLink("AI_RULES.md"),
+    ]
+
+
+def test_repeated_unclosed_destinations_do_not_stall_or_hide_a_later_valid_link():
+    text = "[policy](" * 8_000 + "\n[AI policy](AI_POLICY.md)"
+    assert len(text.encode()) < 80_000
+    assert bounded_links(text) == ["AI_POLICY.md"]
+
+
+def test_valid_nested_link_after_an_unclosed_destination_is_still_collected():
+    assert links("[broken]([AI_POLICY](AI_POLICY.md)") == [PolicyLink("AI_POLICY.md")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[AI [usage policy](AI_POLICY.md)",
+        "[] [AI policy](AI_POLICY.md)",
+        "[unclosed\n[AI policy](AI_POLICY.md)",
+        "[unclosed\r[AI policy](AI_POLICY.md)",
+        "[unclosed\vAI policy](AI_POLICY.md)",
+        r"\[ignored](IGNORED_POLICY.md) [AI policy](AI_POLICY.md)",
+    ],
+)
+def test_label_scanning_keeps_existing_one_line_boundaries(text):
+    assert links(text) == [PolicyLink("AI_POLICY.md")]

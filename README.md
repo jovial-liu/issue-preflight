@@ -14,7 +14,7 @@ Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first examp
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.0/issue_preflight-0.2.0-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.1/issue_preflight-0.2.1-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.0/issue_preflight-0.2.0-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.1/issue_preflight-0.2.1-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -40,7 +40,9 @@ python -m issue_preflight 'OWNER/REPO#123'
 
 Contribution files are read at one pinned commit. Detected policy rules include exact line links and bounded original excerpts. Issues and discussions are a timestamped live snapshot and can change during the scan. The CLI evaluates your authenticated `gh` user by default; use `--actor LOGIN` to evaluate someone else. Identity lookup failures appear as collection gaps.
 
-The scan starts with `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `AGENTS.md`, then follows recognizable explicit links to AI, agent, and contribution policies, including reference-style links. Supported text targets in the same repository can use relative paths, parent directories within the repository, root paths, or GitHub `blob` URLs. Every fetched file uses the report's pinned commit, including links written with an older branch or SHA. The budget is **six contents requests total**, including default probes, missing files, and failed requests. Explicit linked files that are missing, inaccessible, unsupported, external, or ambiguous appear as collection gaps.
+The primary probes are `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `AGENTS.md`. Recognizable explicit links to AI, agent, and contribution policies take priority over remaining probes, including reference-style links. If no nonblank contribution guide has been read, the scan also tries `docs/contributing.md` and `docs/contributing.rst`; `AGENTS.md` alone does not replace that guide. Supported text targets in the same repository can use relative paths, parent directories within the repository, root paths, or GitHub `blob` URLs. Every fetched file uses the report's pinned commit, including links written with an older branch or SHA. The budget is **six contents requests total**, including default probes, missing files, and failed requests. Explicit linked files that are missing, inaccessible, unsupported, external, or ambiguous appear as collection gaps; so do eligible probes left unread at the cap and scans with only blank documents.
+
+RST sources remain available through their pinned file links, with a format limitation gap requiring manual reading. The Markdown-based rule classifier does not evaluate RST, whose comments, examples, and directives have different syntax. RST-native links are not parsed.
 
 An `approval_policy` finding has severity `review`: a detected rule requires a PR to link an issue or discussion containing a maintainer-approved solution. Read the quoted rule and its scope, which may specifically cover AI-generated contributions. The scan does not verify whether an approved solution already exists.
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Try the demonstrated `docs/contributing.md` and `docs/contributing.rst` layouts when no nonblank contribution guide has been read; an agent guide alone does not suppress fallback.
+- Prioritize explicit policy links before remaining probes, sharing one six-request budget and preserving missing, failed, and unread-evidence gaps.
+- Report whitespace or BOM-only documents as missing readable guidance. Keep original source text and pinned URLs.
+- Keep RST sources for manual reading with an explicit format gap, rather than applying Markdown rules to RST comments, examples, and directives.
+- Avoid repeated scans of unclosed Markdown labels and long escape runs, remove suffix copies for reference links, and accept CRLF reference definitions.
+
 ## 0.2.0
 
 - Add an explicit `scan OWNER/REPO` command that selects up to five recently updated open issues by default (maximum ten), excluding PRs, and reuses the full single-issue evidence checks.

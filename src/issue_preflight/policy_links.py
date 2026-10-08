@@ -11,8 +11,10 @@ from .text import prose
 
 DOCUMENT_SUFFIXES = {"md", "markdown", "rst", "txt"}
 EXTENSIONLESS_GUIDES = {"contributing", "contribute", "contribution", "contributions"}
-LABEL = re.compile(r"\[([^\]\r\n]+)\]")
-DEFINITION = re.compile(r"^ {0,3}\[([^\]\r\n]+)\]:[ \t]*(.*)$", re.MULTILINE)
+# Consume an unclosed suffix once instead of retrying at every nested opening.
+LABEL = re.compile(r"\[([^\]\r\n]+)\]|\[[^\]\r\n]*(?=[\r\n]|\Z)")
+REFERENCE = re.compile(r"\[([^\]\r\n]*)\]")
+DEFINITION = re.compile(r"^ {0,3}\[([^\]\r\n]+)\]:[ \t]*([^\r\n]*)\r?$", re.MULTILINE)
 BAD_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 MARKDOWN_ESCAPE = re.compile(r"\\([" + re.escape(string.punctuation) + r"])")
 
@@ -59,7 +61,35 @@ def _looks_like_policy(label: str, destination: str) -> bool:
     )
 
 
-def _destination(value: str, position: int) -> tuple[str, int] | None:
+def _plain_destination_ends(value: str) -> list[int | None]:
+    """Index balanced destination suffixes once, including failed nested scans."""
+    escaped_positions = []
+    escaped = False
+    for character in value:
+        escaped_positions.append(escaped)
+        escaped = character == "\\" and not escaped
+    ends: list[int | None] = [None] * (len(value) + 1)
+    ends[-1] = len(value)
+    for position in range(len(value) - 1, -1, -1):
+        character = value[position]
+        if character in "\r\n\x00":
+            continue
+        if not escaped_positions[position]:
+            if character in " \t)":
+                ends[position] = position
+                continue
+            if character == "(":
+                close = ends[position + 1]
+                if close is not None and value[close : close + 1] == ")":
+                    ends[position] = ends[close + 1]
+                continue
+        ends[position] = ends[position + 1]
+    return ends
+
+
+def _destination(
+    value: str, position: int, ends: list[int | None] | None = None
+) -> tuple[str, int] | None:
     """Read an angle destination or a balanced, whitespace-free destination."""
     while position < len(value) and value[position] in " \t":
         position += 1
@@ -69,20 +99,26 @@ def _destination(value: str, position: int) -> tuple[str, int] | None:
     if value[position] == "<":
         position += 1
         start = position
+        escaped = False
         while position < len(value):
             character = value[position]
             if character in "\r\n\x00" or character == "<":
                 return None
-            if character == ">" and not _escaped(value, position):
+            if character == ">" and not escaped:
                 return value[start:position], position + 1
+            escaped = character == "\\" and not escaped
             position += 1
         return None
+    if ends is not None:
+        end = ends[position]
+        return (value[start:end], end) if end is not None and end > start else None
     depth = 0
+    escaped = False
     while position < len(value):
         character = value[position]
         if character in "\r\n\x00":
             return None
-        if not _escaped(value, position):
+        if not escaped:
             if character == "(":
                 depth += 1
             elif character == ")":
@@ -91,6 +127,7 @@ def _destination(value: str, position: int) -> tuple[str, int] | None:
                 depth -= 1
             elif character in " \t":
                 break
+        escaped = character == "\\" and not escaped
         position += 1
     if depth or position == start:
         return None
@@ -105,12 +142,14 @@ def _tail(value: str, position: int, inline: bool) -> int | None:
     if position > initial and position < len(value) and value[position] in "\"'(":
         delimiter = ")" if value[position] == "(" else value[position]
         position += 1
+        escaped = False
         while position < len(value):
             if value[position] in "\r\n\x00":
                 return None
-            if value[position] == delimiter and not _escaped(value, position):
+            if value[position] == delimiter and not escaped:
                 position += 1
                 break
+            escaped = value[position] == "\\" and not escaped
             position += 1
         else:
             return None
@@ -211,8 +250,9 @@ def policy_links(text: str, repo: str, source_path: str) -> list[PolicyLink]:
     results = []
     seen: set[PolicyLink] = set()
     consumed = 0
+    destination_ends = None
     for label in LABEL.finditer(visible):
-        if label.start() < consumed or _escaped(visible, label.start()):
+        if label[1] is None or label.start() < consumed or _escaped(visible, label.start()):
             continue
         if label.start() and visible[label.start() - 1] == "!":
             continue
@@ -221,18 +261,20 @@ def policy_links(text: str, repo: str, source_path: str) -> list[PolicyLink]:
             continue  # A definition is not itself an occurrence of a link.
         destination = None
         if visible[position : position + 1] == "(":
-            parsed = _destination(visible, position + 1)
+            if destination_ends is None:
+                destination_ends = _plain_destination_ends(visible)
+            parsed = _destination(visible, position + 1, destination_ends)
             if parsed:
                 end = _tail(visible, parsed[1], inline=True)
                 if end is not None:
                     destination = parsed[0]
                     consumed = end
         elif visible[position : position + 1] == "[":
-            reference = re.match(r"\[([^\]\r\n]*)\]", visible[position:])
+            reference = REFERENCE.match(visible, position)
             if reference:
                 key = _reference_label(reference[1] or label[1])
                 destination = definitions.get(key)
-                consumed = position + reference.end()
+                consumed = reference.end()
         else:
             destination = definitions.get(_reference_label(label[1]))
         if destination is None or not _looks_like_policy(label[1], destination):
