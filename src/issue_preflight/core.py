@@ -418,6 +418,99 @@ def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) ->
     return findings
 
 
+def _repository_access(
+    api: API, repo: str, metadata: dict, actor: str | None, omissions: list[str]
+) -> tuple[dict, list[dict]]:
+    """Keep live PR settings separate from pinned guides and bind viewer permissions."""
+    source = f"https://api.github.com/repos/{repo}"
+    enabled = metadata.get("has_pull_requests")
+    policy = metadata.get("pull_request_creation_policy")
+    permissions = metadata.get("permissions")
+    push = permissions.get("push") if isinstance(permissions, dict) else None
+    access = dict(
+        source=source,
+        has_pull_requests=enabled,
+        pull_request_creation_policy=policy,
+        permissions_push=push,
+        authenticated_user=None,
+        identity_source=None,
+        actor_write_access=None,
+    )
+    findings = []
+    if enabled is False:
+        findings.append(
+            _finding(
+                "pull_requests_disabled",
+                "blocker",
+                "Repository has disabled pull requests.",
+                source,
+                "has_pull_requests: false",
+            )
+        )
+        return access, findings
+    unknown_settings = False
+    if type(enabled) is not bool:
+        unknown_settings = True
+        omissions.append("Repository PR-enabled setting is missing or not a boolean.")
+    if policy not in ("all", "collaborators_only"):
+        unknown_settings = True
+        omissions.append("Repository PR creation policy is missing or unrecognized.")
+    if unknown_settings:
+        findings.append(
+            _finding(
+                "unknown_pull_request_access",
+                "review",
+                "Some repository PR settings are unknown. Check the reported API fields.",
+                source,
+            )
+        )
+    if policy != "collaborators_only":
+        return access, findings
+    if type(push) is bool and isinstance(actor, str) and actor:
+        access["identity_source"] = "https://api.github.com/user"
+        try:
+            user = api.get("user")
+        except GitHubError:
+            omissions.append("Authenticated identity lookup failed for repository PR access.")
+        else:
+            login = user.get("login") if isinstance(user, dict) else None
+            if (
+                isinstance(login, str)
+                and login
+                and not any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in login)
+            ):
+                access["authenticated_user"] = login
+                if login.casefold() == actor.casefold():
+                    access["actor_write_access"] = push
+    if access["actor_write_access"] is True:
+        return access, findings
+    if access["actor_write_access"] is False:
+        severity = "blocker"
+        message = (
+            "Repository restricts PR creation to users with write access. "
+            "The authenticated contributor lacks the required write access."
+        )
+    else:
+        severity = "review"
+        message = (
+            "Repository restricts PR creation to users with write access; "
+            "that access was not verified for the evaluated contributor."
+        )
+        omissions.append(
+            "Required repository write access was not verified for the evaluated contributor."
+        )
+    findings.append(
+        _finding(
+            "restricted_pull_requests",
+            severity,
+            message,
+            source,
+            "pull_request_creation_policy: collaborators_only",
+        )
+    )
+    return access, findings
+
+
 def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -> dict:
     """Inspect one issue without creating issues, comments, branches, or PRs."""
     repo, number = parse_target(target)
@@ -430,6 +523,8 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
         raise ValueError("The target is a pull request; supply an issue number.")
     findings = []
     omissions: list[str] = []
+    access, access_findings = _repository_access(api, repo, metadata, actor, omissions)
+    findings.extend(access_findings)
     issue_url = issue["html_url"]
     if metadata.get("archived"):
         findings.append(
@@ -604,6 +699,7 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
         schema="issue-preflight/1",
         fetched_at=datetime.now(timezone.utc).isoformat(),
         repository=repo,
+        repository_access=access,
         policy_ref=commit["sha"],
         actor=actor,
         issue=dict(

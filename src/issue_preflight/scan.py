@@ -14,7 +14,7 @@ PAGE_SIZE = 100
 
 
 class _SharedAPI:
-    """Cache successful common policy requests only for this batch."""
+    """Reuse successful shared policy and identity requests only for this batch."""
 
     def __init__(self, api: API, requested: str, repository: str, metadata: dict):
         self.api = api
@@ -25,7 +25,7 @@ class _SharedAPI:
         if endpoint in self.cache:
             return self.cache[endpoint]
         value = self.api.get(endpoint)
-        if endpoint.startswith(
+        if endpoint == "user" or endpoint.startswith(
             (f"repos/{self.repository}/commits/", f"repos/{self.repository}/contents/")
         ):
             self.cache[endpoint] = value

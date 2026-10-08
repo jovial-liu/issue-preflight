@@ -78,6 +78,41 @@ def markdown(report: dict) -> str:
             "No candidates discovered by this bounded scan. "
             "This does not prove no competing work exists."
         )
+    access = report.get("repository_access")
+    if access:
+        enabled = access["has_pull_requests"]
+        enabled_description = (
+            "enabled" if enabled is True else ("disabled" if enabled is False else "unknown")
+        )
+        policy = access["pull_request_creation_policy"]
+        policy_description = f"`{policy}`" if policy in ("all", "collaborators_only") else "unknown"
+        write = access["actor_write_access"]
+        write_description = "yes" if write is True else ("no" if write is False else "unknown")
+        reported_enabled = _plain(json.dumps(enabled, ensure_ascii=False))
+        reported_policy = _plain(json.dumps(policy, ensure_ascii=False))
+        reported_push = _plain(json.dumps(access["permissions_push"], ensure_ascii=False))
+        lines.extend(
+            [
+                "",
+                "## Repository PR access",
+                "",
+                f"- Pull requests: {enabled_description} (reported: {reported_enabled})",
+                f"- Creation policy: {policy_description} (reported: {reported_policy})",
+                f"- Authenticated account write permission reported by API: {reported_push}",
+                f"- Write access for evaluated contributor: {write_description}",
+                "",
+                f"[Live repository API]({access['source']})",
+            ]
+        )
+        if access["authenticated_user"]:
+            lines.append(
+                "Authenticated account checked: "
+                f"{_plain(access['authenticated_user'])} "
+                f"([identity source]({access['identity_source']}))"
+            )
+        lines.extend(
+            ["", "These settings are a live snapshot; the policy commit does not pin them."]
+        )
     lines.extend(
         ["", "## Contribution policies", "", f"Pinned commit: `{report['policy_ref']}`", ""]
     )

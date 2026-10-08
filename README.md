@@ -14,7 +14,7 @@ Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first examp
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.2/issue_preflight-0.2.2-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.3/issue_preflight-0.2.3-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.2/issue_preflight-0.2.2-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.3/issue_preflight-0.2.3-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -32,6 +32,7 @@ python -m issue_preflight 'OWNER/REPO#123'
 | Evidence | What the report tells you |
 | --- | --- |
 | Issue state and assignees | Whether the issue is closed or someone is already assigned |
+| Repository PR settings | Whether PRs are disabled or require write access, and whether that access was verified for the evaluated contributor |
 | PRs in the timeline, discussion links, and search | Which proposals might overlap, including closed PRs |
 | Explicit closing references | Whether a PR says it fixes this exact issue; `#12` does not match `#123` |
 | Contribution guides, `AGENTS.md`, and linked policies | Recognizable assignment, proposal approval, AI disclosure, and autonomous-agent rules |
@@ -39,6 +40,10 @@ python -m issue_preflight 'OWNER/REPO#123'
 | Collection limits and API failures | Where the evidence is incomplete |
 
 Contribution files are read at one pinned commit. Detected policy rules include exact line links and bounded original excerpts. Issues and discussions are a timestamped live snapshot and can change during the scan. The CLI evaluates your authenticated `gh` user by default; use `--actor LOGIN` to evaluate someone else. Identity lookup failures appear as collection gaps.
+
+Repository PR settings are also a live snapshot. [GitHub can disable PRs or restrict creation to users with write access](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/disabling-pull-requests). Disabled PRs produce `hold`. For `collaborators_only`, the report binds the repository's boolean `permissions.push` to the evaluated contributor only after checking the authenticated login through `GET /user`. Matching write access passes this setting; matching absence of write access produces `hold`. A different `--actor`, an unavailable identity or permission, or missing/unrecognized settings require `review`. Assignment and welcome labels do not waive repository settings, and write access does not clear other findings.
+
+JSON preserves this evidence in `repository_access`, with the live repository API source, reported settings and permission, identity source, authenticated login, and verified actor write access. Contribution-file `policy_ref` does not pin repository settings or identity. An explicit `--actor` can still cause a read of the authenticated account when a restricted repository needs this distinction.
 
 The primary probes are `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `AGENTS.md`. Recognizable explicit links to AI, agent, and contribution policies take priority over remaining probes, including reference-style links. If no nonblank contribution guide has been read, the scan also tries `docs/contributing.md` and `docs/contributing.rst`; `AGENTS.md` alone does not replace that guide. Supported text targets in the same repository can use relative paths, parent directories within the repository, root paths, or GitHub `blob` URLs. Every fetched file uses the report's pinned commit, including links written with an older branch or SHA. The budget is **six contents requests total**, including default probes, missing files, and failed requests. Explicit linked files that are missing, inaccessible, unsupported, external, or ambiguous appear as collection gaps; so do eligible probes left unread at the cap and scans with only blank documents.
 
@@ -49,6 +54,8 @@ A `help wanted` or `prs welcome` label waives a recognized assignment rule only 
 An `approval_policy` finding has severity `review`: a detected rule requires a PR to link an issue or discussion containing a maintainer-approved solution. Read the quoted rule and its scope, which may specifically cover AI-generated contributions. The scan does not verify whether an approved solution already exists.
 
 ## Real examples
+
+An installed v0.2.3 scan of `python-jsonschema/jsonschema#1584` returned `hold` because the repository limited PR creation to users with write access and the authenticated account lacked that access. Version 0.2.2 had returned `review` only for a missing contribution guide and exited 0 with `--fail-on-hold`; v0.2.3 exits 2 and retains the guide gap. See the [recorded repository-access snapshot](examples/repository-pr-access.md). These settings can change; no PR creation was attempted.
 
 On October 9, 2026, scanning `modelcontextprotocol/python-sdk#3656` found:
 
@@ -95,7 +102,7 @@ issue-preflight scan OWNER/REPO --limit 5 --format json --output scan.json
 
 It selects the first **5 open issues by most recent update**, in GitHub REST order, and excludes pull requests. `--limit` accepts 1–10. Selection reads at most two pages of 100 entries, including PRs. Each selected issue uses the same evidence checks and full report as the single-issue command, including timeline PRs when an issue has no comments. This selects issues for further investigation; it does not rank their value or recommend implementing them.
 
-The batch uses schema `issue-preflight-scan/1`. `results` contains an issue plus either its complete `issue-preflight/1` report or an `error`, and `summary` counts decisions and errors without assigning a blanket approval. Successful common repository and pinned-policy requests are reused within the batch; issue, comment, and timeline evidence is fetched separately for each issue. Issues can close and the listing order can change while collection runs. Duplicate issue numbers are selected once; the listing is not an atomic snapshot.
+The batch uses schema `issue-preflight-scan/1`. `results` contains an issue plus either its complete `issue-preflight/1` report or an `error`, and `summary` counts decisions and errors without assigning a blanket approval. Successful common repository, authenticated-identity, and pinned-policy requests are reused within the batch; issue, comment, and timeline evidence is fetched separately for each issue. Issues can close and the listing order can change while collection runs. Duplicate issue numbers are selected once; the listing is not an atomic snapshot.
 
 `listing_status` distinguishes the selection boundary from missing evidence:
 
