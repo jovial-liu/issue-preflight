@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
 from copy import deepcopy
 
 import pytest
 
+from issue_preflight import cli
 from issue_preflight.core import closes_issue, inspect, parse_target
 from issue_preflight.github import GitHubError, NotFound
 
@@ -212,6 +214,100 @@ def test_assignment_comparison_is_case_insensitive():
 def test_policy_that_welcomes_agents_is_not_a_prohibition():
     api = FixtureAPI("We welcome agents filing PRs autonomously.")
     assert "autonomous_agent_policy" not in codes(inspect(api, "example/project#42"))
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "Contents are fully **reviewed, tested, and understood by a human**",
+        "Contributions must be reviewed by a human.",
+        "Review by a human is expected.",
+        "Contributions must be reviewed, tested,\nand understood by a human.",
+        "Contributions must be reviewed\nby a **human**.",
+        "Contributions must be reviewed by\na human.",
+        "Contributions must be reviewed by **a human**.",
+        "Contributions must be reviewed and approved by a human.",
+        "Contributions must be reviewed, checked, and approved by a human.",
+        "Code must be __reviewed, tested, and understood by a human__.",
+        "Code must be reviewed by __a human__.",
+        "Code must be _reviewed_ by a _human_.",
+        "Code must be **reviewed** by **a human**.",
+        "Code must be __reviewed__\r\nby a __human__.",
+        "Human review is required before submitting a PR.",
+        "Use a human-in-the-loop team before submitting a PR.",
+    ],
+)
+def test_human_review_policy_keeps_original_evidence(clause):
+    # First clause: requests-cache CONTRIBUTING.md at e7f0f73a8194a89497f41f8556334d8993ebee2a.
+    policy = "# Contributing\n\n" + clause + "\n"
+    result = inspect(FixtureAPI(policy), "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "human_review_policy")
+    assert result["decision"] == "review"
+    assert result["collection_gaps"] == []
+    assert finding["severity"] == "review"
+    assert finding["excerpt"] == clause
+    assert finding["line_start"] == 3
+    assert finding["line_end"] == 3 + clause.count("\n")
+    anchor = "#L3" + (f"-L{finding['line_end']}" if finding["line_end"] != 3 else "")
+    assert finding["url"] == f"https://github.com/{REPO}/blob/{SHA}/CONTRIBUTING.md{anchor}"
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        "Contributions must be reviewed by a bot.",
+        "Code is reviewed by a human-like bot.",
+        "Code is reviewed by a human–like bot.",
+        "Code is reviewed by a __human-like bot__.",
+        "Code is reviewed by a human-like review bot.",
+        "Code is reviewed by a human–like reviewer.",
+        "The reviewed_by_human field must be true.",
+        "The __reviewed_by_human__ field must be true.",
+        "The review document is written by a human.",
+        "Code is reviewed by a bot, and documentation is written by a human.",
+        "Code is reviewed and documentation is written by a human.",
+        "Code is reviewed\n# Documentation\nWritten by a human.",
+        "- Code is reviewed\n- Documentation is written by a human.",
+        "Code is reviewed. Documentation is written by a human.",
+        "Code is reviewed! Documentation is written by a human.",
+        "Code is reviewed? Documentation is written by a human.",
+        "Code is reviewed\n\nDocumentation is written by a human.",
+        "Code is reviewed by\n\na human.",
+        "Code is reviewed" + " elsewhere" * 20 + " by a human.",
+        "```\nContributions must be reviewed by a human.\n```",
+        "Example: `Contributions must be reviewed by a human.`",
+        "<!-- Contributions must be reviewed by a human. -->",
+    ],
+)
+def test_unrelated_or_example_review_text_is_not_a_human_policy(policy):
+    result = inspect(FixtureAPI(policy), "example/project#42")
+    assert "human_review_policy" not in codes(result)
+    assert result["decision"] == "no_obvious_blockers"
+
+
+def test_cli_fails_on_newly_detected_human_review_policy(monkeypatch, tmp_path, capsys):
+    api = FixtureAPI("Contents are fully **reviewed, tested, and understood by a human**")
+    monkeypatch.setattr(cli, "GitHub", lambda: api)
+    output = tmp_path / "report.json"
+    assert (
+        cli.main(
+            [
+                "example/project#42",
+                "--actor",
+                "Contributor",
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--fail-on-review",
+            ]
+        )
+        == 2
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert capsys.readouterr().out == ""
+    assert report["decision"] == "review"
+    assert "human_review_policy" in codes(report)
 
 
 def test_wrapped_policy_that_prohibits_autonomous_prs_is_detected():

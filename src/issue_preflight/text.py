@@ -12,6 +12,37 @@ def _escaped(text: str, position: int) -> bool:
     return (position - start) % 2 == 1
 
 
+def without_emphasis(text: str) -> str:
+    """Space paired word-boundary emphasis delimiters without shifting evidence.
+
+    Apply to already masked prose. This handles common single/double emphasis;
+    underscores inside identifiers and escaped delimiters remain literal.
+    """
+    masked = list(text)
+    pending: dict[str, int] = {}
+    # Delimiter runs and hard boundaries are visited once, including unmatched runs.
+    for token in re.finditer(r"\*+|_+|\x00|\r?\n[ \t]*\r?\n", text):
+        mark = token[0]
+        if mark[0] not in "*_":
+            pending.clear()
+            continue
+        if len(mark) > 2 or _escaped(text, token.start()):
+            continue
+        before = text[token.start() - 1] if token.start() else ""
+        after = text[token.end()] if token.end() < len(text) else ""
+        opens = (not before or not re.match(r"[\w*_]", before)) and bool(after)
+        opens = opens and not after.isspace() and after not in "*_"
+        closes = bool(before) and not before.isspace() and before not in "*_"
+        closes = closes and (not after or not re.match(r"[\w*_]", after))
+        if closes and mark in pending:
+            start = pending.pop(mark)
+            masked[start : start + len(mark)] = " " * len(mark)
+            masked[token.start() : token.end()] = " " * len(mark)
+        elif opens:
+            pending.setdefault(mark, token.start())
+    return "".join(masked)
+
+
 def prose(text: str) -> str:
     """Hide fences, inline code and HTML comments, preserving length and newlines.
 
