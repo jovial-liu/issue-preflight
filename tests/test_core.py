@@ -285,3 +285,171 @@ def test_local_policy_links_do_not_fetch_external_or_traversal_paths():
     api = FixtureAPI("[guide](https://evil.test/contributing.md) [other](../contributing.md)")
     inspect(api, "example/project#42")
     assert not any("evil" in call or ".." in call for call in api.calls)
+
+
+def test_assignment_evidence_has_pinned_lines_and_original_excerpt():
+    policy = "# Contributing\n\nThe author must be assigned.\nMore details here.\n"
+    result = inspect(FixtureAPI(policy), "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "assignment_policy")
+    assert finding["url"] == f"https://github.com/{REPO}/blob/{SHA}/CONTRIBUTING.md#L3"
+    assert finding["line_start"] == finding["line_end"] == 3
+    assert finding["excerpt"] == "The author must be assigned."
+    assert finding["path"] == "CONTRIBUTING.md"
+
+
+def test_wrapped_assignment_evidence_covers_both_source_lines():
+    policy = "# Contributing\n\nThe author must\nbe assigned.\n"
+    result = inspect(FixtureAPI(policy), "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "assignment_policy")
+    assert finding["url"].endswith("#L3-L4")
+    assert finding["excerpt"] == "The author must\nbe assigned."
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "~~~markdown\nFixes #42\n~~~",
+        "````markdown\n```\nFixes #42\n```\n````",
+        "<!-- Fixes #42 -->",
+        "Example: ``Fixes #42``",
+    ],
+)
+def test_markdown_examples_do_not_block_contributions(body):
+    api = FixtureAPI()
+    api.timeline = [link()]
+    api.prs = {51: pr(body=body)}
+    result = inspect(api, "example/project#42")
+    assert "existing_fix" not in codes(result)
+
+
+def test_fenced_policy_and_maintainer_examples_are_not_rules():
+    api = FixtureAPI("# Examples\n\n~~~\nThe author must be assigned.\n~~~\n")
+    api.comments = [
+        {
+            "author_association": "MEMBER",
+            "body": "Example comment:\n```\nDo not open another PR.\n```",
+        }
+    ]
+    assert inspect(api, "example/project#42")["decision"] == "no_obvious_blockers"
+
+
+def test_maintainer_request_keeps_original_text_and_comment_url():
+    api = FixtureAPI()
+    api.comments = [
+        {
+            "author_association": "MEMBER",
+            "body": "Thanks for looking.\nPlease do not open another PR until we agree.\n",
+            "html_url": f"https://github.com/{REPO}/issues/42#issuecomment-123",
+        }
+    ]
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "maintainer_stop")
+    assert finding["excerpt"] == "Please do not open another PR until we agree."
+    assert finding["url"].endswith("#issuecomment-123")
+    assert finding["line_start"] == finding["line_end"] == 2
+
+
+def test_existing_fix_reports_original_closing_directive():
+    api = FixtureAPI()
+    api.timeline = [link()]
+    api.prs = {51: pr(body="Changes:\n\nFixes #42.\n")}
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "existing_fix")
+    assert finding["excerpt"] == "Fixes #42."
+    assert finding["line_start"] == 3
+
+
+def test_unresolved_manual_link_is_visible_in_collection_gaps():
+    api = FixtureAPI()
+    api.timeline = [{"event": "connected", "node_id": "CE_example"}]
+    result = inspect(api, "example/project#42")
+    assert result["decision"] == "review"
+    assert any("manual" in gap.lower() for gap in result["collection_gaps"])
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Example:\n\n    Fixes #42",
+        "Example:\n\n        Fixes #42",
+        "> ~~~\n> Fixes #42\n> ~~~",
+    ],
+)
+def test_indented_and_quoted_code_are_not_fixes(body):
+    assert not closes_issue(pr(body=body), REPO, 42)
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "~~~\nFixes #41\n~~~",
+        "````\n```\nFixes #41\n```\n````",
+        "<!-- Fixes #41 -->",
+        "Example: ``Fixes #41``",
+        "Example:\n\n    Fixes #41\n",
+    ],
+)
+def test_real_fix_after_an_example_remains_visible_at_original_line(example):
+    body = example + "\n\nFixes #42.\n"
+    api = FixtureAPI()
+    api.timeline = [link()]
+    api.prs = {51: pr(body=body)}
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "existing_fix")
+    assert finding["excerpt"] == "Fixes #42."
+    assert finding["line_start"] == body.splitlines().index("Fixes #42.") + 1
+
+
+def test_cross_repo_reference_mask_preserves_original_evidence_offsets():
+    api = FixtureAPI()
+    api.timeline = [link()]
+    candidate = pr(body="Fixes #99, but also fixes example/project#42.\n")
+    candidate["base"]["repo"]["full_name"] = "another/project"
+    api.prs = {51: candidate}
+    result = inspect(api, "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "existing_fix")
+    assert finding["excerpt"] == candidate["body"].strip()
+
+
+def test_long_line_excerpt_stays_bounded_and_keeps_detected_rule():
+    policy = "Before " * 500 + "The author must be assigned." + " After" * 500
+    result = inspect(FixtureAPI(policy), "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "assignment_policy")
+    assert len(finding["excerpt"]) < 400
+    assert "author must be assigned" in finding["excerpt"]
+    assert finding["excerpt_truncated"] is True
+    assert finding["line_start"] == finding["line_end"] == 1
+
+
+def test_policy_windows_newlines_have_correct_line_anchors():
+    policy = "# Contributing\r\n\r\nThe author must be assigned.\r\n"
+    result = inspect(FixtureAPI(policy), "example/project#42")
+    finding = next(f for f in result["findings"] if f["code"] == "assignment_policy")
+    assert finding["url"].endswith("#L3")
+    assert finding["excerpt"] == "The author must be assigned."
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        "Example `<!--` syntax.",
+        "```html\n<!--\n```",
+        "<!--\n```\n-->",
+        "An unmatched backtick `",
+        "> ```\n> example",
+        r"Literal \` notation.",
+    ],
+)
+def test_examples_and_comments_do_not_hide_a_later_real_fix(before):
+    after = "\n\nFixes #42\n\nAnother unmatched backtick `"
+    assert closes_issue(pr(body=before + after), REPO, 42)
+
+
+def test_inline_negation_is_not_erased_into_an_assignment_requirement():
+    api = FixtureAPI("The author must `not` be assigned.")
+    assert "assignment_policy" not in codes(inspect(api, "example/project#42"))
+
+
+def test_inline_code_does_not_cross_a_paragraph_interrupting_fence():
+    body = 'An unmatched backtick `\n```python\nprint("`")\n```\nFixes #42'
+    assert closes_issue(pr(body=body), REPO, 42)

@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 from .github import GitHubError, NotFound
+from .text import prose
 
 REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 TARGET = re.compile(rf"(?P<repo>{REPOSITORY})#(?P<number>[1-9][0-9]*)\Z")
@@ -45,18 +46,54 @@ def _reference_pattern(repo: str, number: int) -> re.Pattern[str]:
 
 def closes_issue(pr: dict[str, Any], repo: str, number: int) -> bool:
     """Match closing references, avoiding #12/#123 and cross-repo ambiguity."""
-    body = str(pr.get("body") or "")
+    return _closing_reference(pr, repo, number) is not None
+
+
+def _closing_reference(pr: dict[str, Any], repo: str, number: int) -> re.Match | None:
+    body = prose(str(pr.get("body") or ""))
     # Unqualified # references only apply to the PR's base repository.
     base_repo = pr.get("base", {}).get("repo", {}).get("full_name", repo)
     if base_repo.lower() != repo.lower():
-        body = re.sub(r"(?<![\w/])#[0-9]+", "", body)
-    # A code example is not an actual GitHub closing directive.
-    body = re.sub(r"```.*?```|`[^`\n]*`", "", body, flags=re.DOTALL)
-    return bool(_reference_pattern(repo, number).search(body))
+        body = re.sub(r"(?<![\w/])#[0-9]+", lambda m: " " * len(m[0]), body)
+    return _reference_pattern(repo, number).search(body)
 
 
 def _finding(code: str, severity: str, message: str, url: str, excerpt: str = "") -> dict:
     return dict(code=code, severity=severity, message=message, url=url, excerpt=excerpt)
+
+
+def _source_finding(
+    code: str,
+    severity: str,
+    message: str,
+    url: str,
+    text: str,
+    match: re.Match,
+    path: str | None = None,
+) -> dict:
+    """Cite the original lines matched in offset-preserving classifier text."""
+    line_start = text.count("\n", 0, match.start()) + 1
+    line_end = text.count("\n", 0, match.end() - 1) + 1
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    if end < 0:
+        end = len(text)
+    # Keep context bounded even when a source puts its whole document on one line.
+    excerpt_start = max(start, match.start() - 160)
+    excerpt_end = min(end, match.end() + 160)
+    if path:
+        url += f"#L{line_start}"
+        if line_start != line_end:
+            url += f"-L{line_end}"
+    finding = _finding(code, severity, message, url, text[excerpt_start:excerpt_end].rstrip("\r"))
+    finding.update(
+        line_start=line_start,
+        line_end=line_end,
+        excerpt_truncated=excerpt_start != start or excerpt_end != end,
+    )
+    if path:
+        finding["path"] = path
+    return finding
 
 
 def _pages(api: API, endpoint: str, omissions: list[str], limit: int = 2) -> list[dict]:
@@ -101,7 +138,7 @@ def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> li
             omissions.append(f"Could not decode policy: {path}")
             continue
         documents.append(
-            dict(path=path, text=text, url=f"https://github.com/{repo}/blob/{sha}/{path}")
+            dict(path=path, text=text, url=f"https://github.com/{repo}/blob/{sha}/{quote(path)}")
         )
         # Follow local contribution guides, never arbitrary external URLs or traversal paths.
         for link in re.findall(r"\]\(([^)\s#]+)(?:#[^)]*)?\)", text):
@@ -123,47 +160,62 @@ def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) ->
     findings = []
     for doc in documents:
         # Detect only recognizable rules; all other policy text remains available to review.
-        text = doc["text"]
-        if re.search(
-            r"agent.{0,40}(?:filing|open(?:ing)?).{0,80}(?:PRs|pull requests)"
-            r".{0,80}autonomously.{0,160}(?:turn it off|not allowed|not acceptable)",
+        text = prose(doc["text"])
+        autonomous_rule = re.search(
+            r"agent[^\x00]{0,40}(?:filing|open(?:ing)?)[^\x00]{0,80}(?:PRs|pull requests)"
+            r"[^\x00]{0,80}autonomously[^\x00]{0,160}(?:turn it off|not allowed|not acceptable)",
             text,
             re.IGNORECASE | re.DOTALL,
-        ):
+        )
+        if autonomous_rule:
             findings.append(
-                _finding(
+                _source_finding(
                     "autonomous_agent_policy",
                     "blocker",
                     "Policy explicitly addresses autonomous agent PRs. Read it before proceeding.",
                     doc["url"],
+                    doc["text"],
+                    autonomous_rule,
+                    doc["path"],
                 )
             )
         assignment_rule = re.search(
-            r"(?:author must (?:also )?be assigned|"
-            r"pull requests from outside.{0,160}only.{0,160}assigned|"
-            r"external PRs must.{0,160}assigned)",
+            r"(?:author\s+must\s+(?:also\s+)?be\s+assigned|"
+            r"pull\s+requests\s+from\s+outside[^\x00]{0,160}only[^\x00]{0,160}assigned|"
+            r"external\s+PRs\s+must[^\x00]{0,160}assigned)",
             text,
             re.IGNORECASE | re.DOTALL,
         )
         if assignment_rule and "assign" in text.lower():
-            exceptions = set(re.findall(r"[`\"'](help wanted|prs welcome)[`\"']", text, re.I))
+            exceptions = set(
+                re.findall(r"[`\"'](help wanted|prs welcome)[`\"']", doc["text"], re.I)
+            )
             exceptions = {label.lower() for label in exceptions}
             if not assigned and not (labels & exceptions):
                 findings.append(
-                    _finding(
+                    _source_finding(
                         "assignment_policy",
                         "blocker",
                         "Guide requires assignment; no matching assignment or welcome label found.",
                         doc["url"],
+                        doc["text"],
+                        assignment_rule,
+                        doc["path"],
                     )
                 )
-        if re.search(r"(?:human.{0,20}(?:loop|review)|(?:unreviewed|undisclosed) AI)", text, re.I):
+        human_rule = re.search(
+            r"(?:human[^\x00\r\n]{0,20}(?:loop|review)|(?:unreviewed|undisclosed) AI)", text, re.I
+        )
+        if human_rule:
             findings.append(
-                _finding(
+                _source_finding(
                     "human_review_policy",
                     "review",
                     "Contribution guide describes human review or AI disclosure expectations.",
                     doc["url"],
+                    doc["text"],
+                    human_rule,
+                    doc["path"],
                 )
             )
     return findings
@@ -205,20 +257,29 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
         if item.get("author_association") not in MAINTAINERS:
             continue
         body = str(item.get("body") or "")
-        if re.search(
-            r"(?:do not|don't|please don't) open (?:another |a |any )?(?:PR|pull request)",
-            body,
+        stop_request = re.search(
+            r"(?:do\s+not|don't|please\s+don't)\s+open\s+"
+            r"(?:another\s+|a\s+|any\s+)?(?:PR\b|pull\s+request\b)",
+            prose(body),
             re.I,
-        ):
+        )
+        if stop_request:
             findings.append(
-                _finding(
+                _source_finding(
                     "maintainer_stop",
                     "blocker",
                     "A maintainer explicitly asks not to open a PR.",
                     item.get("html_url", issue_url),
+                    body,
+                    stop_request,
                 )
             )
     candidates: dict[tuple[str, int], set[str]] = {}
+    if any(item.get("event") in {"connected", "disconnected"} for item in timeline):
+        omissions.append(
+            "Manual issue/PR links changed in the timeline; current manual links "
+            "are not resolved by this REST scan. Check the issue's Development sidebar."
+        )
     for item in timeline:
         source = (item.get("source") or {}).get("issue") or {}
         if item.get("event") == "cross-referenced" and "pull_request" in source:
@@ -254,7 +315,8 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
         except GitHubError:
             omissions.append(f"Could not read PR: {pr_repo}#{pr_number}")
             continue
-        closing = closes_issue(pr, repo, number)
+        closing_match = _closing_reference(pr, repo, number)
+        closing = closing_match is not None
         state = "merged" if pr.get("merged") else pr["state"]
         prs.append(
             dict(
@@ -269,11 +331,13 @@ def inspect(api: API, target: str, actor: str | None = None, max_prs: int = 8) -
         )
         if closing and state in {"open", "merged"}:
             findings.append(
-                _finding(
+                _source_finding(
                     "existing_fix",
                     "blocker",
                     f"PR #{pr_number} ({state}) explicitly targets this issue.",
                     pr["html_url"],
+                    str(pr.get("body") or ""),
+                    closing_match,
                 )
             )
         elif state == "closed" and (closing or "timeline" in origins):

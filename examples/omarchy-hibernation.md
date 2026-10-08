@@ -4,13 +4,18 @@ Hibernation prompt loses RAM size on non-English locales (hibernation-setup pars
 
 Decision: **hold**
 
-[Issue](https://github.com/omacom/omarchy/issues/14507) · Evidence collected: 2026-10-08T17:29:32.127310+00:00
+Contributor evaluated: jovial-liu
+
+[Issue](https://github.com/omacom/omarchy/issues/14507) · Evidence collected: 2026-10-08T17:43:11.239850+00:00
 
 Heuristic evidence review, not maintainer approval or a guarantee of complete discovery.
 
 ## Findings
 
 - **blocker**: PR #14520 (open) explicitly targets this issue. ([source](https://github.com/omacom/omarchy/pull/14520))
+
+  > Fixes \#14507\.
+
 
 ## Pull requests
 

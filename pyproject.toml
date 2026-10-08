@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "issue-preflight"
-version = "0.1.0"
+version = "0.1.1"
 description = "Check GitHub contribution evidence before implementing an issue."
 readme = "README.md"
 requires-python = ">=3.10"

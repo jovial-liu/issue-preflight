@@ -10,12 +10,12 @@ It runs locally, uses your existing `gh` login, and has **no Python runtime depe
 
 ## Quick start
 
-Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/).
+Requires Python 3.10+ and [GitHub CLI](https://cli.github.com/). The first example also uses [pipx](https://pipx.pypa.io/stable/installation/); the virtual-environment alternative below needs neither pipx nor Git.
 
 ```bash
 gh auth login
-pipx install git+https://github.com/jovial-liu/issue-preflight.git
-issue-preflight 'modelcontextprotocol/python-sdk#3656' --actor YOUR_GITHUB_LOGIN
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.1/issue_preflight-0.1.1-py3-none-any.whl
+issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
 Alternatively, install in a Python virtual environment:
@@ -23,7 +23,7 @@ Alternatively, install in a Python virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install git+https://github.com/jovial-liu/issue-preflight.git
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.1.1/issue_preflight-0.1.1-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -38,7 +38,7 @@ python -m issue_preflight 'OWNER/REPO#123'
 | Maintainer messages | Whether a maintainer explicitly says not to open another PR |
 | Collection limits and API failures | Where the evidence is incomplete |
 
-Contribution files are read at one pinned commit. Issues and discussions are a timestamped live snapshot and can change during the scan.
+Contribution files are read at one pinned commit. Detected policy rules include exact line links and bounded original excerpts. Issues and discussions are a timestamped live snapshot and can change during the scan. The CLI evaluates your authenticated `gh` user by default; use `--actor LOGIN` to evaluate someone else. Identity lookup failures appear as collection gaps.
 
 ## A real example
 
@@ -56,10 +56,9 @@ Ask your agent to run the preflight before implementing the issue, read the link
 
 ```bash
 issue-preflight 'OWNER/REPO#123' \
-  --actor YOUR_GITHUB_LOGIN \
   --format json \
   --output preflight.json \
-  --fail-on-hold
+  --fail-on-review
 ```
 
 | Decision | Meaning |
@@ -68,11 +67,13 @@ issue-preflight 'OWNER/REPO#123' \
 | `review` | Overlap, ownership, human review expectations, or collection gaps need investigation |
 | `no_obvious_blockers` | Nothing obvious was found in the collected evidence; this is not approval |
 
-By default, a completed report exits 0. `--fail-on-hold` exits 2 for `hold`; an input, authentication, or required API failure exits 1. `--max-prs` bounds detailed PR lookups (default 8, maximum 20). Comments and timeline events are capped at 200 each, and PR search at 100 results. Every reached cap appears in `collection_gaps`.
+By default, a completed report exits 0. `--fail-on-hold` exits 2 for `hold`; `--fail-on-review` exits 2 for either `hold` or `review`, including incomplete evidence. Both options still write the report. An input, authentication, or required API failure exits 1. `--max-prs` bounds detailed PR lookups (default 8, maximum 20). Comments and timeline events are capped at 200 each, and PR search at 100 results. Every reached cap appears in `collection_gaps`.
 
 ## Limits
 
-Policy detection is heuristic and currently recognizes English phrasing. Contributions rules can live outside the checked Markdown paths, a quoted rule can be ambiguous, and trusted-contributor exceptions may require a maintainer's judgment. PR search discovers references, not semantic equivalence; a differently worded competing fix can be missed. Read the sources rather than treating any decision as a guarantee of completeness or acceptance.
+Policy detection is heuristic and currently recognizes English phrasing. Contribution rules can live outside the checked Markdown paths, a quoted rule can be ambiguous, and trusted-contributor exceptions may require a maintainer's judgment. Common code examples and HTML comments are excluded, but the classifier is not a complete Markdown parser. Closing references show stated intent; automatic closure also depends on GitHub's default-branch rules.
+
+PR search discovers references, not semantic equivalence; a differently worded competing fix can be missed. This REST scan does not resolve current manual links in the Development sidebar or infer fixes from commit messages. Manual-link events are reported as collection gaps. Read the sources rather than treating any decision as a guarantee of completeness or acceptance.
 
 GitHub authentication remains managed by `gh`. The tool does not create issues, comments, branches, or PRs. Reports can contain private repository metadata if you scan a private repo; choose where to save and share them.
 
