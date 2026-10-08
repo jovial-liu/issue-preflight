@@ -203,8 +203,16 @@ def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) ->
                         doc["path"],
                     )
                 )
+        # Allow soft wrapping and coordinated review actions, not unrelated clauses.
+        soft_space = r"[ \t]*(?:\r?\n[ \t]*)?[*_]{0,2}"
+        review_action = r"(?:tested|understood|checked|approved)\b"
         human_rule = re.search(
-            r"(?:human[^\x00\r\n]{0,20}(?:loop|review)|(?:unreviewed|undisclosed) AI)", text, re.I
+            r"(?:human[^\x00\r\n]{0,20}(?:loop|review)|(?:unreviewed|undisclosed) AI|"
+            rf"\breview(?:ed)?\b(?:{soft_space},{soft_space}{review_action}){{0,2}}"
+            rf"(?:{soft_space}(?:,{soft_space})?and\b{soft_space}{review_action})?"
+            rf"{soft_space}\bby\b{soft_space}(?:a\b{soft_space})?human\b)",
+            text,
+            re.I,
         )
         if human_rule:
             findings.append(
