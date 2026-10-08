@@ -37,7 +37,13 @@ class FixtureAPI:
     def get(self, endpoint: str):
         self.calls.append(endpoint)
         if endpoint == f"repos/{REPO}":
-            return dict(full_name=REPO, default_branch="main", archived=self.archived)
+            return dict(
+                full_name=REPO,
+                default_branch="main",
+                archived=self.archived,
+                has_pull_requests=True,
+                pull_request_creation_policy="all",
+            )
         if endpoint == f"repos/{REPO}/issues/42":
             return deepcopy(self.issue)
         if "/comments?" in endpoint:

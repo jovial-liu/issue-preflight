@@ -14,7 +14,7 @@
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.2/issue_preflight-0.2.2-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.3/issue_preflight-0.2.3-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.2/issue_preflight-0.2.2-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.2.3/issue_preflight-0.2.3-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
@@ -48,11 +48,16 @@ Codex / Claude Code 可以使用仓库内的 [Issue Preflight 技能](skills/iss
 ## 检查范围
 
 - issue 的开启状态、认领人和标签。
+- 仓库是否禁用 PR，是否只允许有写权限的贡献者投稿，以及被评估者的权限是否已核实。
 - 时间线、讨论和搜索中出现的 PR，包括已关闭 PR。
 - PR 是否明确声明修复当前 issue，避免把 `#12` 和 `#123` 混为一谈。
 - 固定同一提交读取贡献指南、`AGENTS.md` 和明确链接的政策，检测到的规则带具体行号与原文片段。
 - 维护者明确提出的停止提交要求。
 - API 失败、分页和数量上限造成的证据缺口。
+
+仓库投稿设置属于实时快照。[GitHub 可以禁用 PR，或限制为有写权限的贡献者才能提交](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/disabling-pull-requests)。禁用 PR 时返回 `hold`；`collaborators_only` 要求核对 `GET /user` 的实际登录身份，再将仓库返回的布尔 `permissions.push` 用于同一被评估者。有写权限仅通过这一项门槛；明确没有所需写权限时返回 `hold`。指定其他 `--actor`、身份或权限无法核实、设置缺失或无法识别时返回 `review`。认领与欢迎标签不会豁免仓库设置，写权限也不会取消其他阻断。
+
+JSON 的 `repository_access` 保留实时仓库 API 来源、原设置与权限值、身份来源、实际登录用户及已核实的被评估者写权限。贡献文件的 `policy_ref` 不固定仓库设置或登录身份；受限仓库即使显式指定 `--actor`，也可能读取当前认证身份，以避免将一个账号的权限用于另一个人。
 
 主探测路径是 `CONTRIBUTING.md`、`.github/CONTRIBUTING.md` 和 `AGENTS.md`。已发现的明确 AI、Agent 和贡献政策链接优先于剩余探测，包括引用式链接。未读到非空白贡献指南时，还会尝试 `docs/contributing.md`、`docs/contributing.rst`；仅有 `AGENTS.md` 不会取消贡献指南的回退查找。同仓库且受支持的文本文件可以通过相对路径、父目录（不能越过仓库根目录）、根路径或 GitHub `blob` URL 引用；读取一律使用本轮固定的提交，不使用链接中的旧分支或旧 SHA。总计最多 **六次 contents 请求**，包含默认探测、404 和失败请求。明确链接的文件不存在、无法读取、类型不支持、位于外部或路径有歧义时，都会记录证据缺口；达到上限后仍未读取的有效探测路径，以及只读到空白文件的情况，也会留下缺口。
 
@@ -65,6 +70,8 @@ RST 文件会保留固定提交的来源链接，并列出格式限制，要求�
 读取 PR 详情前会合并仓库名的大小写变体，并优先检查已知仓库名与目标一致的候选；各组内部保留发现顺序，失败请求仍占详情预算。尚未读取的旧仓库重定向别名无法预先获得此优先级。详情读取后，报告使用实际 base 仓库身份。外仓库且未声明关闭当前 issue 的 PR，无论开启、关闭或合并，都作为相关性尚未核验的引用展示。
 
 ## 真实案例
+
+使用已安装的 v0.2.3 检查 `python-jsonschema/jsonschema#1584` 时，仓库限制为有写权限才能提交 PR，而当前认证账号没有所需权限，因此返回 `hold`。v0.2.2 仅因未读到贡献指南而返回 `review`，使用 `--fail-on-hold` 时退出码为 0；v0.2.3 返回 2，同时保留指南缺口。查看[仓库投稿权限快照](examples/repository-pr-access.md)。这些设置可能变化，本次没有尝试创建 PR。
 
 此前扫描 `Textualize/rich#4225` 已因关联 PR 关闭而得到 `review`，但漏读了 AI 政策。在固定提交 `9d8f9a372cc5916fd4781fec207ced7ddac2f08f` 中，[CONTRIBUTING.md 第 9 行](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/CONTRIBUTING.md#L9) 链接到 `master/AI_POLICY.md`。v0.1.2 会在同一固定提交读取该文件，并补出[第 5 行](https://github.com/Textualize/rich/blob/9d8f9a372cc5916fd4781fec207ced7ddac2f08f/AI_POLICY.md#L5)针对 AI 生成 PR 的方案审批规则。查看[政策报告快照](examples/rich-ai-policy.md)；报告引用要求，没有核验方案是否已经获批。
 
@@ -80,7 +87,7 @@ issue-preflight scan OWNER/REPO --limit 5 --format json --output scan.json
 
 默认按 GitHub REST 的最近更新时间降序选择前 **5 个 open issue**，排除 PR；`--limit` 支持 1–10。列表最多读取两页，每页 100 条，包含 PR。每个选中 issue 都复用原有的完整证据报告与政策、认领、覆盖判断，包括没有评论但时间线已有 PR 的情况。这里只降低寻找候选的成本，不评估问题价值或建议直接开工。
 
-批量 JSON 使用 `issue-preflight-scan/1`：`results` 每项包含 issue 及完整的原 `issue-preflight/1` 报告，或明确的 `error`；`summary` 分别计数，不给整批“安全”结论。批次内复用成功的仓库信息和固定提交政策请求；每个 issue、评论和时间线仍单独获取。采集期间 issue 可能关闭、列表顺序可能变化；重复编号只选择一次，列表不是原子快照。
+批量 JSON 使用 `issue-preflight-scan/1`：`results` 每项包含 issue 及完整的原 `issue-preflight/1` 报告，或明确的 `error`；`summary` 分别计数，不给整批“安全”结论。批次内复用成功的仓库信息、认证身份和固定提交政策请求；每个 issue、评论和时间线仍单独获取。采集期间 issue 可能关闭、列表顺序可能变化；重复编号只选择一次，列表不是原子快照。
 
 | `listing_status` | 含义 | `selection_truncated` |
 | --- | --- | --- |

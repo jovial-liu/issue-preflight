@@ -47,7 +47,13 @@ class ScanAPI:
                 raise self.user
             return self.user
         if endpoint == f"repos/{REPO}":
-            return dict(full_name=REPO, default_branch="main", archived=False)
+            return dict(
+                full_name=REPO,
+                default_branch="main",
+                archived=False,
+                has_pull_requests=True,
+                pull_request_creation_policy="all",
+            )
         if endpoint.startswith(f"repos/{REPO}/issues?"):
             params = parse_qs(urlsplit(endpoint).query)
             assert params["state"] == ["open"]
@@ -333,7 +339,13 @@ def test_repository_redirect_uses_canonical_listing_and_shared_metadata(monkeypa
         def get(self, endpoint):
             if endpoint == "repos/old/project":
                 self.calls.append(endpoint)
-                return dict(full_name=REPO, default_branch="main", archived=False)
+                return dict(
+                    full_name=REPO,
+                    default_branch="main",
+                    archived=False,
+                    has_pull_requests=True,
+                    pull_request_creation_policy="all",
+                )
             return super().get(endpoint)
 
     api = RedirectAPI([[issue(1), issue(2)]])
