@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode
 
 from .github import GitHubError, NotFound
 from .policy_links import policy_links
-from .text import prose
+from .text import prose, without_emphasis
 
 REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 TARGET = re.compile(rf"(?P<repo>{REPOSITORY})#(?P<number>[1-9][0-9]*)\Z")
@@ -229,14 +229,14 @@ def _policy_findings(documents: list[dict], assigned: bool, labels: set[str]) ->
                     )
                 )
         # Allow soft wrapping and coordinated review actions, not unrelated clauses.
-        soft_space = r"[ \t]*(?:\r?\n[ \t]*)?[*_]{0,2}"
+        soft_space = r"[ \t]*(?:\r?\n[ \t]*)?"
         review_action = r"(?:tested|understood|checked|approved)\b"
         human_rule = re.search(
             r"(?:human[^\x00\r\n]{0,20}(?:loop|review)|(?:unreviewed|undisclosed) AI|"
             rf"\breview(?:ed)?\b(?:{soft_space},{soft_space}{review_action}){{0,2}}"
             rf"(?:{soft_space}(?:,{soft_space})?and\b{soft_space}{review_action})?"
-            rf"{soft_space}\bby\b{soft_space}(?:a\b{soft_space})?human\b)",
-            text,
+            rf"{soft_space}\bby\b{soft_space}(?:a\b{soft_space})?human\b(?![-\u2010-\u2015]))",
+            without_emphasis(text),
             re.I,
         )
         if human_rule:

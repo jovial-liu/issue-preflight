@@ -228,6 +228,11 @@ def test_policy_that_welcomes_agents_is_not_a_prohibition():
         "Contributions must be reviewed by **a human**.",
         "Contributions must be reviewed and approved by a human.",
         "Contributions must be reviewed, checked, and approved by a human.",
+        "Code must be __reviewed, tested, and understood by a human__.",
+        "Code must be reviewed by __a human__.",
+        "Code must be _reviewed_ by a _human_.",
+        "Code must be **reviewed** by **a human**.",
+        "Code must be __reviewed__\r\nby a __human__.",
         "Human review is required before submitting a PR.",
     ],
 )
@@ -250,6 +255,11 @@ def test_human_review_policy_keeps_original_evidence(clause):
     "policy",
     [
         "Contributions must be reviewed by a bot.",
+        "Code is reviewed by a human-like bot.",
+        "Code is reviewed by a human–like bot.",
+        "Code is reviewed by a __human-like bot__.",
+        "The reviewed_by_human field must be true.",
+        "The __reviewed_by_human__ field must be true.",
         "The review document is written by a human.",
         "Code is reviewed by a bot, and documentation is written by a human.",
         "Code is reviewed and documentation is written by a human.",

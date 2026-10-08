@@ -12,6 +12,24 @@ def _escaped(text: str, position: int) -> bool:
     return (position - start) % 2 == 1
 
 
+def without_emphasis(text: str) -> str:
+    """Space paired word-boundary emphasis delimiters without shifting evidence.
+
+    Apply to already masked prose. This handles common single/double emphasis;
+    underscores inside identifiers and escaped delimiters remain literal.
+    """
+    masked = list(text)
+    pattern = r"(?<![\w\\*_])(?P<mark>\*{1,2}|_{1,2})(?![\s*_])"
+    pattern += r"[^\x00]*?[^\s*_](?P=mark)(?![\w*_])"
+    for match in re.finditer(pattern, text):
+        width = len(match["mark"])
+        if _escaped(text, match.start()) or _escaped(text, match.end() - width):
+            continue
+        masked[match.start() : match.start() + width] = " " * width
+        masked[match.end() - width : match.end()] = " " * width
+    return "".join(masked)
+
+
 def prose(text: str) -> str:
     """Hide fences, inline code and HTML comments, preserving length and newlines.
 
