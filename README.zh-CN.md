@@ -14,7 +14,7 @@
 
 ```bash
 gh auth login
-pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.0/issue_preflight-0.3.0-py3-none-any.whl
+pipx install https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.1/issue_preflight-0.3.1-py3-none-any.whl
 issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```
 
@@ -23,7 +23,7 @@ issue-preflight 'modelcontextprotocol/python-sdk#3656'
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.0/issue_preflight-0.3.0-py3-none-any.whl
+python -m pip install https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.1/issue_preflight-0.3.1-py3-none-any.whl
 python -m issue_preflight 'OWNER/REPO#123'
 ```
 
