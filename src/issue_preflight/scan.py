@@ -26,7 +26,11 @@ class _SharedAPI:
             return self.cache[endpoint]
         value = self.api.get(endpoint)
         if endpoint == "user" or endpoint.startswith(
-            (f"repos/{self.repository}/commits/", f"repos/{self.repository}/contents/")
+            (
+                f"repos/{self.repository}/commits/",
+                f"repos/{self.repository}/contents/",
+                f"repos/{self.repository}/git/blobs/",
+            )
         ):
             self.cache[endpoint] = value
         return value

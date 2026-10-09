@@ -5,6 +5,7 @@ import json
 from copy import deepcopy
 
 import pytest
+from policy_fixtures import file_response
 
 from issue_preflight import cli
 from issue_preflight.core import _policy_documents, closes_issue, inspect, parse_target
@@ -55,11 +56,7 @@ class FixtureAPI:
         if endpoint == f"repos/{REPO}/commits/main":
             return {"sha": SHA}
         if endpoint == f"repos/{REPO}/contents/CONTRIBUTING.md?ref={SHA}" and self.policy:
-            return dict(
-                encoding="base64",
-                size=len(self.policy),
-                content=base64.b64encode(self.policy.encode()).decode(),
-            )
+            return file_response("CONTRIBUTING.md", self.policy)
         if "/contents/" in endpoint:
             raise NotFound()
         if "/pulls/" in endpoint:
@@ -923,8 +920,7 @@ class LinkedPolicyAPI(FixtureAPI):
                 raise value
             if not isinstance(value, str):
                 return value
-            raw = value.encode("utf-8")
-            return dict(encoding="base64", size=len(raw), content=base64.b64encode(raw).decode())
+            return file_response(unquote(path), value)
         return super().get(endpoint)
 
 
