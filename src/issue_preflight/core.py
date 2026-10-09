@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -137,6 +138,56 @@ def _contribution_guide_path(path: str) -> bool:
     return basename in EXTENSIONLESS_GUIDES
 
 
+def _blob_sha(raw: bytes) -> str:
+    header = b"blob " + str(len(raw)).encode() + b"\0"
+    return hashlib.sha1(header + raw, usedforsecurity=False).hexdigest()
+
+
+def _policy_bytes(result: dict, limit: int) -> bytes:
+    size = result.get("size")
+    if (
+        result.get("encoding") != "base64"
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or not 0 <= size <= limit
+        or not isinstance(result.get("content"), str)
+    ):
+        raise ValueError("Unsupported policy payload.")
+    raw = base64.b64decode("".join(result["content"].split()), validate=True)
+    if len(raw) != size:
+        raise ValueError("Policy size does not match its bytes.")
+    return raw
+
+
+def _policy_target(path: str, raw: bytes) -> str | None:
+    # Git link targets are literal filesystem paths, not Markdown destinations.
+    target = raw.decode("utf-8")
+    if (
+        not target
+        or target.startswith("/")
+        or ":" in target
+        or "\\" in target
+        or any(ord(char) < 32 or ord(char) == 127 for char in target)
+    ):
+        return None
+    parts = path.split("/")[:-1]
+    for part in target.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    if not parts or target.endswith("/"):
+        return None
+    name = parts[-1].casefold()
+    if name.rsplit(".", 1)[-1] not in DOCUMENT_SUFFIXES and name not in EXTENSIONLESS_GUIDES:
+        return None
+    return "/".join(parts)
+
+
 def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> list[dict]:
     documents: list[dict] = []
     queue: list[str] = []
@@ -144,6 +195,9 @@ def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> li
     fallbacks = list(POLICY_FALLBACK_PATHS)
     states: dict[str, str] = {}
     explicit: set[str] = set()
+    loaded: dict[str, tuple[str, bytes, bool]] = {}
+    blobs: dict[str, bytes | None] = {}
+    published: set[str] = set()
     guide_found = False
 
     def missing_link(path: str) -> None:
@@ -151,51 +205,122 @@ def _policy_documents(api: API, repo: str, sha: str, omissions: list[str]) -> li
         if gap not in omissions:
             omissions.append(gap)
 
-    while len(states) < 6:
-        path = None
-        # Explicit evidence precedes filename guesses, even for a queued probe.
-        for candidates in (queue, probes, fallbacks if not guide_found else []):
-            while candidates and candidates[0] in states:
-                candidates.pop(0)
-            if candidates:
-                path = candidates.pop(0)
-                break
-        if path is None:
-            break
-        states[path] = "failed"  # Every actual contents request uses the same bounded budget.
+    def load(path: str, trail: tuple[str, ...] = ()) -> tuple[str, bytes, bool] | None:
+        if path in trail:
+            omissions.append(f"Policy source redirect cycle: {path}")
+            return None
+        if path in states:
+            return loaded.get(path)
+        if len(states) == 6:
+            omissions.append(f"Policy source verification capped at six file requests: {path}")
+            return None
+        states[path] = "failed"  # Failed and missing contents requests also consume the budget.
         try:
             result = api.get(f"repos/{repo}/contents/{quote(path)}?ref={sha}")
         except NotFound:
             states[path] = "missing"
             if path in explicit:
                 missing_link(path)
-            continue
+            return None
         except GitHubError:
             omissions.append(f"Could not read policy: {path}")
-            continue
+            return None
         if not isinstance(result, dict):
             omissions.append(f"Policy did not return a supported text file: {path}")
-            continue
+            return None
+        identity = result.get("sha")
         if (
-            result.get("encoding") != "base64"
-            or not isinstance(result.get("size"), int)
-            or result["size"] > 80000
-            or not isinstance(result.get("content"), str)
+            result.get("path") != path
+            or result.get("type") not in ("file", "symlink")
+            or not isinstance(identity, str)
+            or re.fullmatch(r"[0-9a-f]{40}", identity) is None
         ):
-            omissions.append(f"Policy unsupported or larger than 80 KB: {path}")
-            continue
+            omissions.append(f"Could not verify policy source metadata: {path}")
+            return None
+        raw = None
+        if result["type"] == "file":
+            try:
+                raw = _policy_bytes(result, 80000)
+                raw.decode("utf-8")
+            except (ValueError, UnicodeError):
+                omissions.append(f"Could not decode or verify policy bytes (80 KB limit): {path}")
+                return None
+            if _blob_sha(raw) == identity:
+                states[path] = "fetched"
+                loaded[path] = (path, raw, _contribution_guide_path(path))
+                return loaded[path]
+        # Contents can return a link target's body with the link's own blob SHA.
+        # Verify the original blob before using any candidate target path.
+        if identity not in blobs:
+            blobs[identity] = None
+            try:
+                blob = api.get(f"repos/{repo}/git/blobs/{identity}")
+                if not isinstance(blob, dict) or blob.get("sha") != identity:
+                    raise ValueError("Invalid blob identity.")
+                link_raw = _policy_bytes(blob, 4096)
+                if _blob_sha(link_raw) != identity:
+                    raise ValueError("Blob bytes do not match their identity.")
+                blobs[identity] = link_raw
+            except (GitHubError, ValueError):
+                pass
         try:
-            raw = base64.b64decode("".join(result["content"].split()), validate=True)
-            if len(raw) > 80000:
-                omissions.append(f"Policy larger than 80 KB: {path}")
-                continue
-            text = raw.decode("utf-8")
-        except (ValueError, KeyError, UnicodeError):
-            omissions.append(f"Could not decode policy: {path}")
-            continue
+            target = _policy_target(path, blobs[identity]) if blobs[identity] is not None else None
+        except UnicodeError:
+            target = None
+        if target is None:
+            omissions.append(f"Could not verify a same-repository policy source target: {path}")
+            return None
+        explicit.add(target)
+        if states.get(target) == "missing":
+            missing_link(target)
+        document = load(target, (*trail, path))
+        if document is None:
+            omissions.append(f"Could not verify redirected policy source: {path}")
+            return None
+        canonical, canonical_raw, guide = document
+        if raw is not None and raw != canonical_raw:
+            omissions.append(f"Policy source contents disagree with the verified target: {path}")
+            return None
         states[path] = "fetched"
-        if _has_policy_text(text) and _contribution_guide_path(path):
+        loaded[path] = (canonical, canonical_raw, guide or _contribution_guide_path(path))
+        return loaded[path]
+
+    while True:
+        path = None
+        # Explicit evidence precedes filename guesses, even for a queued probe.
+        for candidates in (queue, probes, fallbacks if not guide_found else []):
+            while (
+                candidates
+                and candidates[0] in states
+                and (candidates[0] not in loaded or loaded[candidates[0]][0] in published)
+            ):
+                candidates.pop(0)
+            if candidates:
+                if len(states) == 6:
+                    # A separately linked verified target can still be reported
+                    # after an earlier alias conflicted, without another GET.
+                    path = next(
+                        (p for p in candidates if p in loaded and loaded[p][0] not in published),
+                        None,
+                    )
+                    if path is None:
+                        continue
+                    candidates.remove(path)
+                else:
+                    path = candidates.pop(0)
+                break
+        if path is None:
+            break
+        document = load(path)
+        if document is None:
+            continue
+        path, raw, guide = document
+        text = raw.decode("utf-8")
+        if _has_policy_text(text) and guide:
             guide_found = True
+        if path in published:
+            continue
+        published.add(path)
         documents.append(
             dict(path=path, text=text, url=f"https://github.com/{repo}/blob/{sha}/{quote(path)}")
         )

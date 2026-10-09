@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 import json
 import re
 
 import pytest
+from policy_fixtures import file_response
 
 from issue_preflight import cli
 from issue_preflight.core import inspect
@@ -83,12 +83,7 @@ class RepositoryAPI:
             return {"sha": COMMIT}
         if path == f"repos/{REPOSITORY}/contents/CONTRIBUTING.md":
             assert endpoint.endswith(f"?ref={COMMIT}")
-            return {
-                "type": "file",
-                "encoding": "base64",
-                "size": len(self.policy.encode()),
-                "content": base64.b64encode(self.policy.encode()).decode(),
-            }
+            return file_response("CONTRIBUTING.md", self.policy)
         if path.startswith(f"repos/{REPOSITORY}/contents/"):
             raise NotFound()
         raise AssertionError(f"Unexpected API GET: {endpoint}")

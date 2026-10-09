@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import base64
 import json
 from copy import deepcopy
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from policy_fixtures import file_response
 
 from issue_preflight import cli
 from issue_preflight.github import GitHubError, NotFound
@@ -84,11 +84,7 @@ class ScanAPI:
         if endpoint == f"repos/{REPO}/commits/main":
             return {"sha": SHA}
         if endpoint == f"repos/{REPO}/contents/CONTRIBUTING.md?ref={SHA}":
-            return dict(
-                encoding="base64",
-                size=len(self.policy),
-                content=base64.b64encode(self.policy.encode()).decode(),
-            )
+            return file_response("CONTRIBUTING.md", self.policy)
         if "/contents/" in endpoint:
             raise NotFound()
         if "/pulls/" in endpoint:
