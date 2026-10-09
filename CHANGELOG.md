@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Verify policy paths and Git blob hashes against exact decoded bytes before citing source lines.
+- Resolve supported in-repository symlink targets at the pinned commit, using canonical paths for citations and relative policy links within the existing six-contents-request budget.
+- Bound and deduplicate additional blob checks; preserve unverified sources, conflicts, cycles, unsafe targets, and budget limits as visible collection gaps.
+
 ## 0.3.0
 
 - Add an optional local MCP stdio server with `inspect_issue` and `scan_repository` tools, using the official Python SDK 2.3 or newer. The base CLI still has no third-party runtime dependencies.

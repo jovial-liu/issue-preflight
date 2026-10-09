@@ -5,7 +5,7 @@ Issue Preflight 0.3.0 provides an optional stdio server using the [official Pyth
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install "issue-preflight[mcp] @ https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.0/issue_preflight-0.3.0-py3-none-any.whl"
+python -m pip install "issue-preflight[mcp] @ https://github.com/jovial-liu/issue-preflight/releases/download/v0.3.1/issue_preflight-0.3.1-py3-none-any.whl"
 gh auth status
 issue-preflight-mcp --help
 ```
